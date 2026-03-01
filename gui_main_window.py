@@ -379,6 +379,11 @@ class MainWindow(QMainWindow):
         # Tabs (Resultados / Tabela)
         # ---------------------------------------------------------
         self.tabs = QTabWidget()
+        
+        # Nova Tabela para Dados Brutos
+        self.table_dados = QTableWidget()
+        self.table_dados.setSortingEnabled(True)
+        self.tabs.addTab(self.table_dados, "Dados") # Será a primeira aba
 
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
@@ -399,7 +404,7 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget()
         self.table.setSortingEnabled(True)
         self.tabs.addTab(self.table, "Tabela (Resultados)")
-
+        
         # ---------------------------------------------------------
         # Área de figuras (splitters 2x3)
         # ---------------------------------------------------------
@@ -1174,7 +1179,13 @@ class MainWindow(QMainWindow):
             df, info = self._read_table_file(path)
             self.df = df
             self.csv_path = path
-
+            
+            # Preenche a aba "Dados" imediatamente
+            self._fill_table_from_df(self.table_dados, self.df)
+            
+            # Foca na aba de Dados para o usuário ver o que carregou
+            self.tabs.setCurrentWidget(self.table_dados)
+            
             self.preco = None
             self.model = None
 
@@ -1424,8 +1435,16 @@ class MainWindow(QMainWindow):
             pass
 
         try:
+            # Pegamos apenas os dados que o usuário deixou "Ativos" na aba Dados
+            df_selecionado = self._get_active_df()
+
+            if df_selecionado.empty:
+                self.log("❌ Erro: Nenhuma linha ativa selecionada na aba Dados.")
+                self._update_action_states()
+                return
+
             self.model = MQO(
-                self.df.copy(),
+                df_selecionado,
                 preco=self.preco,
                 gui_log=self.log,
                 gui_progress=self.progress_slot,
@@ -1875,3 +1894,89 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"Erro ao exportar PDF: {e}")
             QMessageBox.critical(self, "Erro", f"Falha na exportação: {e}")
+
+    def _fill_table_from_df(self, table_widget: QTableWidget, df: pd.DataFrame):
+        if df is None:
+            table_widget.setRowCount(0)
+            table_widget.setColumnCount(0)
+            return
+
+        table_widget.setRowCount(len(df))
+        # Adicionamos +1 coluna para o Checkbox de "Ativo"
+        table_widget.setColumnCount(len(df.columns) + 1)
+        
+        headers = ["Ativo"] + [str(c) for c in df.columns]
+        table_widget.setHorizontalHeaderLabels(headers)
+
+        table_widget.blockSignals(True)
+        for r in range(len(df)):
+            # --- Inserir Checkbox na Coluna 0 ---
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            chk_item.setCheckState(Qt.CheckState.Checked) # Começa como ativo
+            chk_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table_widget.setItem(r, 0, chk_item)
+
+            # --- Preencher os dados das outras colunas ---
+            for c in range(len(df.columns)):
+                val = df.iat[r, c]
+                text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
+                table_widget.setItem(r, c + 1, QTableWidgetItem(text))
+        
+        table_widget.blockSignals(False)
+        table_widget.resizeColumnsToContents()
+
+        # Conectar sinal para mudar a cor da linha quando desmarcar
+        table_widget.itemChanged.connect(self._on_data_item_changed)
+
+    def _on_data_item_changed(self, item):
+        # Só nos interessa se a mudança foi na coluna 0 (Ativo)
+        if item.column() != 0:
+            return
+
+        row = item.row()
+        table = self.table_dados
+        is_checked = (item.checkState() == Qt.CheckState.Checked)
+
+        # Se desmarcado, pintamos a linha de cinza escuro
+        color = Qt.GlobalColor.white if is_checked else Qt.GlobalColor.darkGray
+        
+        for col in range(table.columnCount()):
+            cell = table.item(row, col)
+            if cell:
+                cell.setForeground(color)
+                
+    def _get_active_df(self) -> pd.DataFrame:
+        """Varre a tabela de dados e retorna um DataFrame apenas com as linhas marcadas."""
+        if self.df is None:
+            return None
+
+        active_indices = []
+        for r in range(self.table_dados.rowCount()):
+            item = self.table_dados.item(r, 0)
+            # Verifica se o checkbox da primeira coluna está marcado
+            if item and item.checkState() == Qt.CheckState.Checked:
+                active_indices.append(r)
+
+        if not active_indices:
+            return pd.DataFrame() # Retorna vazio se nada estiver marcado
+
+        # Filtra o DataFrame original usando os índices da tabela
+        return self.df.iloc[active_indices].copy()
+        
+    def _on_data_item_changed(self, item):
+        """Muda a cor da linha para indicar se o dado está ativo ou não."""
+        if item.column() != 0: # Só nos interessa a coluna do Checkbox
+            return
+
+        row = item.row()
+        is_active = (item.checkState() == Qt.CheckState.Checked)
+        
+        # Define a cor: Branco para ativo, Cinza para inativo
+        color = Qt.GlobalColor.white if is_active else Qt.GlobalColor.gray
+        
+        for col in range(self.table_dados.columnCount()):
+            cell = self.table_dados.item(row, col)
+            if cell:
+                cell.setForeground(color)
+

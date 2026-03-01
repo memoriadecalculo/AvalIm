@@ -897,7 +897,10 @@ class MQO:
 
         fig = Figure(figsize=(6, 5))
         ax = fig.add_subplot(1, 1, 1)
-        ax.scatter(amostra.index, standardized_residuals)
+        
+        # AJUSTE AQUI: Somamos 1 ao index para que a contagem visual comece em 1
+        ax.scatter(amostra.index + 1, standardized_residuals)
+        
         ax.set_xlabel("Número do Dado")
         ax.set_ylabel("Resíduo Padronizado")
         ax.axhline(y=float(self.outliers_lim), color='red', linestyle='--', linewidth=1)
@@ -1139,12 +1142,14 @@ class MQO:
         n = len(c)
         
         threshold_nbr = 4 / n
-        threshold_classico = 1.0 # O limite que você mencionou
+        threshold_classico = 1.0 
 
         fig = Figure(figsize=(7, 5))
         ax = fig.add_subplot(1, 1, 1)
-        indices = np.arange(n)
-        ax.stem(indices, c, markerfmt=",", linefmt="C0-", basefmt="k-")
+
+        # AJUSTE 1: Criamos o intervalo de 1 até n (inclusive)
+        indices_ajustados = np.arange(1, n + 1)
+        ax.stem(indices_ajustados, c, markerfmt=",", linefmt="C0-", basefmt="k-")
         
         # Linha 1: O limite de 4/n (Atenção)
         ax.axhline(y=threshold_nbr, color='orange', linestyle='--', label=f'Atenção (4/n: {threshold_nbr:.2f})')
@@ -1152,13 +1157,16 @@ class MQO:
         # Linha 2: O limite de 1.0 (Crítico)
         ax.axhline(y=threshold_classico, color='red', linestyle='--', linewidth=2, label='Crítico (1.0)')
         
-        # Etiquetar apenas o que estiver acima do menor limite para não poluir
+        # AJUSTE 2: Etiquetar pontos influentes somando 1 ao índice
+        # Onde c > threshold_nbr, pegamos o índice original (0-based) para acessar o array 'c'
         influential_points = np.where(c > threshold_nbr)[0]
         for i in influential_points:
-            ax.annotate(str(i), (i, c[i]), textcoords="offset points", 
+            # Exibimos i + 1 no texto e posicionamos em i + 1 no eixo X
+            ax.annotate(str(i + 1), (i + 1, c[i]), textcoords="offset points", 
                         xytext=(0, 5), ha='center', fontsize=8, color='darkred')
 
-        ax.set_ylim(0, max(max(c)*1.1, 1.1)) # Garante que a linha 1.0 apareça
+        ax.set_xlabel("Número do Dado") # Adicionado para manter a consistência
+        ax.set_ylim(0, max(max(c)*1.1, 1.1)) 
         ax.set_title("Influência - Distância de Cook")
         ax.legend()
         
