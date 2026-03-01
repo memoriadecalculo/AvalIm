@@ -6,3 +6,7 @@ seaborn
 fpdf2
 pyinstaller
 numpy
+openpyxl
+xlrd
+odfpy
+scipy
