@@ -1,0 +1,8 @@
+PyQt6
+pandas
+statsmodels
+matplotlib
+seaborn
+fpdf2
+pyinstaller
+numpy

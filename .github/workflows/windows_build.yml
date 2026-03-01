@@ -1,0 +1,36 @@
+name: Gerar Executável Windows
+
+on:
+  push:
+    branches: [ "main" ]  # Troque para 'master' se sua branch principal tiver esse nome
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11' # Versão estável para bibliotecas científicas
+
+    - name: Instalar dependências
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Gerar Executável com PyInstaller
+      run: |
+        # --noconsole: não abre o CMD preto atrás
+        # --onefile: gera um único arquivo .exe
+        # --collect-all: garante que o statsmodels e matplotlib levem todas as sub-bibliotecas
+        pyinstaller --noconsole --onefile --collect-all statsmodels --collect-all matplotlib --name "AvalIm_Windows" main.py
+
+    - name: Upload do Executável (Artefato)
+      uses: actions/upload-artifact@v4
+      with:
+        name: AvalIm_Executavel_Windows
+        path: dist/AvalIm_Windows.exe
