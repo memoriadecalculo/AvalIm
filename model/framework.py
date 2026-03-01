@@ -1111,13 +1111,13 @@ class MQO:
         return resumo
         
     def salvar_todos_graficos(self, diretorio, usar_limpo=False):
-        """Salva os 6 gráficos padrão como arquivos PNG para o laudo."""
         import os
         caminhos = {}
         planos = {
             "boxplot": self.boxplot,
             "graficos": self.graficos,
             "residuos": self.residuos_grafico,
+            "cooks": self.cooks_distance_grafico, # <--- ADICIONADO AQUI
             "corr": self.matrix_corr,
             "aderencia": self.aderencia,
             "hist": self.histograma
@@ -1131,3 +1131,37 @@ class MQO:
                 caminhos[nome] = path
                 plt.close(fig) # Limpa memória
         return caminhos
+
+    def cooks_distance_grafico(self, usar_limpo=False, show=True):
+        modelo = self.modelo_limpo if usar_limpo else self.modelo
+        influence = modelo.get_influence()
+        (c, p) = influence.cooks_distance
+        n = len(c)
+        
+        threshold_nbr = 4 / n
+        threshold_classico = 1.0 # O limite que você mencionou
+
+        fig = Figure(figsize=(7, 5))
+        ax = fig.add_subplot(1, 1, 1)
+        indices = np.arange(n)
+        ax.stem(indices, c, markerfmt=",", linefmt="C0-", basefmt="k-")
+        
+        # Linha 1: O limite de 4/n (Atenção)
+        ax.axhline(y=threshold_nbr, color='orange', linestyle='--', label=f'Atenção (4/n: {threshold_nbr:.2f})')
+        
+        # Linha 2: O limite de 1.0 (Crítico)
+        ax.axhline(y=threshold_classico, color='red', linestyle='--', linewidth=2, label='Crítico (1.0)')
+        
+        # Etiquetar apenas o que estiver acima do menor limite para não poluir
+        influential_points = np.where(c > threshold_nbr)[0]
+        for i in influential_points:
+            ax.annotate(str(i), (i, c[i]), textcoords="offset points", 
+                        xytext=(0, 5), ha='center', fontsize=8, color='darkred')
+
+        ax.set_ylim(0, max(max(c)*1.1, 1.1)) # Garante que a linha 1.0 apareça
+        ax.set_title("Influência - Distância de Cook")
+        ax.legend()
+        
+        fig.tight_layout()
+        _maybe_show_fig(fig, show)
+        return None if show else fig

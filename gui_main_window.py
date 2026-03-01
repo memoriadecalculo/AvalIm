@@ -495,8 +495,10 @@ class MainWindow(QMainWindow):
         m_file = mb.addMenu("&Arquivo")
         # Mantive o nome do método (load_csv) por compatibilidade, mas agora carrega vários formatos.
         self.act_load_csv = self._make_action("Carregar &Dados...", slot=self.load_csv, shortcut=QKeySequence.StandardKey.Open)
+        self.act_export = self._make_action("Exportar Laudo PDF...", slot=self.exportar_laudo_pdf, shortcut=QKeySequence("Ctrl+Shift+E"))
         self.act_exit = self._make_action("Sa&ir", slot=self.close, shortcut=QKeySequence.StandardKey.Quit)
         m_file.addAction(self.act_load_csv)
+        m_file.addAction(self.act_export)
         m_file.addSeparator()
         m_file.addAction(self.act_exit)
 
@@ -516,7 +518,7 @@ class MainWindow(QMainWindow):
         self.act_use_clean.setChecked(False)
         self.act_predict = self._make_action("Predizer Valor...", slot=self.run_predicao, shortcut=QKeySequence("Ctrl+P"))
         self.act_enquadrar = self._make_action("Enquadramento NBR...", slot=self.run_enquadramento)
-        self.act_export = self._make_action("Exportar Laudo PDF...", slot=self.exportar_laudo_pdf, shortcut=QKeySequence("Ctrl+Shift+E"))
+        self.act_cooks = self._make_action("Distância de &Cook", slot=self.run_cooks, shortcut=QKeySequence("Ctrl+Shift+C"))
         
         m_model.addAction(self.act_set_preco)
         m_model.addSeparator()
@@ -530,8 +532,7 @@ class MainWindow(QMainWindow):
         m_model.addAction(self.act_use_clean)
         m_model.addAction(self.act_predict)
         m_model.addAction(self.act_enquadrar)
-        m_file.addAction(self.act_export)
-
+        
         m_rep = mb.addMenu("&Relatórios")
         self.act_summary = self._make_action("&Resumo (summary)", slot=self.run_summary, shortcut=QKeySequence("Ctrl+M"))
         self.act_elast = self._make_action("&Elasticidades", slot=self.run_elasticidades, shortcut=QKeySequence("Ctrl+E"))
@@ -557,6 +558,7 @@ class MainWindow(QMainWindow):
         m_plot.addAction(self.act_aderencia)
         m_plot.addSeparator()
         m_plot.addAction(self.act_hist)
+        m_plot.addAction(self.act_cooks)
 
         m_tests = mb.addMenu("&Testes")
         self.act_shapiro = self._make_action("Normalidade &SW (Shapiro)", slot=self.run_shapiro, shortcut=QKeySequence("Ctrl+1"))
@@ -1549,6 +1551,16 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"Erro em histograma: {e}")
 
+    def run_cooks(self):
+        self.log_action("Distância de Cook")
+        if not self.model:
+            self.log("Nenhum modelo ajustado.")
+            return
+        try:
+            fig = self.model.cooks_distance_grafico(usar_limpo=self.usar_limpo(), show=False)
+            self._open_plot_window(fig, "Distância de Cook (Influência)")
+        except Exception as e:
+            self.log(f"Erro ao gerar Distância de Cook: {e}")
     # ============================================================
     # TESTES / TEXTOS — worker
     # ============================================================
