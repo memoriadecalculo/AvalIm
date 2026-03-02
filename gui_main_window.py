@@ -560,23 +560,23 @@ class MainWindow(QMainWindow):
         m_rep.addSeparator()
         m_rep.addAction(self.act_dist_res)
 
-        m_plot = mb.addMenu("&Gráficos")
-        self.act_graficos = self._make_action("&Gráficos", slot=self.run_graficos, shortcut=QKeySequence("Ctrl+G"))
-        self.act_boxplot = self._make_action("&Boxplot", slot=self.run_boxplot, shortcut=QKeySequence("Ctrl+B"))
-        self.act_corr = self._make_action("Matriz de &Correlação", slot=self.run_matrix_corr, shortcut=QKeySequence("Ctrl+K"))
-        self.act_aderencia = self._make_action("&Aderência", slot=self.run_aderencia, shortcut=QKeySequence("Ctrl+A"))
-        self.act_residuos = self._make_action("Resíduos &Padronizados", slot=self.run_residuos, shortcut=QKeySequence("Ctrl+P"))
-        self.act_hist = self._make_action("&Histograma", slot=self.run_histograma, shortcut=QKeySequence("Ctrl+H"))
+        # m_plot = mb.addMenu("&Gráficos")
+        # self.act_graficos = self._make_action("&Gráficos", slot=self.run_graficos, shortcut=QKeySequence("Ctrl+G"))
+        # self.act_boxplot = self._make_action("&Boxplot", slot=self.run_boxplot, shortcut=QKeySequence("Ctrl+B"))
+        # self.act_corr = self._make_action("Matriz de &Correlação", slot=self.run_matrix_corr, shortcut=QKeySequence("Ctrl+K"))
+        # self.act_aderencia = self._make_action("&Aderência", slot=self.run_aderencia, shortcut=QKeySequence("Ctrl+A"))
+        # self.act_residuos = self._make_action("Resíduos &Padronizados", slot=self.run_residuos, shortcut=QKeySequence("Ctrl+P"))
+        # self.act_hist = self._make_action("&Histograma", slot=self.run_histograma, shortcut=QKeySequence("Ctrl+H"))
 
-        m_plot.addAction(self.act_boxplot)
-        m_plot.addAction(self.act_graficos)
-        m_plot.addAction(self.act_residuos)
-        m_plot.addSeparator()
-        m_plot.addAction(self.act_corr)
-        m_plot.addAction(self.act_aderencia)
-        m_plot.addSeparator()
-        m_plot.addAction(self.act_hist)
-        m_plot.addAction(self.act_cooks)
+        # m_plot.addAction(self.act_boxplot)
+        # m_plot.addAction(self.act_graficos)
+        # m_plot.addAction(self.act_residuos)
+        # m_plot.addSeparator()
+        # m_plot.addAction(self.act_corr)
+        # m_plot.addAction(self.act_aderencia)
+        # m_plot.addSeparator()
+        # m_plot.addAction(self.act_hist)
+        # m_plot.addAction(self.act_cooks)
 
         m_tests = mb.addMenu("&Testes")
         self.act_shapiro = self._make_action("Normalidade &SW (Shapiro)", slot=self.run_shapiro, shortcut=QKeySequence("Ctrl+1"))
@@ -676,8 +676,8 @@ class MainWindow(QMainWindow):
 
         for act in [
             self.act_summary, self.act_elast, self.act_dist_res,
-            self.act_boxplot, self.act_corr, self.act_graficos, self.act_aderencia,
-            self.act_residuos, self.act_hist,
+            # self.act_boxplot, self.act_corr, self.act_graficos, self.act_aderencia,
+            # self.act_residuos, self.act_hist,
             self.act_shapiro, self.act_kstest, self.act_bp, self.act_dw, self.act_vif
         ]:
             act.setEnabled(has_any_fit and (not is_running))
@@ -728,6 +728,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btn_predict_tool'):
             # Lupa desabilitada enquanto calcula ou se não houver modelo
             self.btn_predict_tool.setEnabled(not is_running and has_any_fit)
+        
+        # Controle do botão de PDF na Toolbar
+        if hasattr(self, 'btn_pdf_tool'):
+            # Habilitado apenas se NÃO estiver calculando e se HOUVER um modelo pronto
+            self.btn_pdf_tool.setEnabled(not is_running and has_any_fit)
 
     # ============================================================
     # Helpers gerais
@@ -2120,6 +2125,14 @@ class MainWindow(QMainWindow):
         # Adicionamos as referências à lista de ações para desabilitar durante o Fit
         # (Isso garante que o usuário não clique em calcular enquanto já está calculando)
         self._toolbar_actions = [self.btn_calc_tool, self.btn_predict_tool]
+        
+        # 4. EXPORTAR PDF (ÍCONE DE DISQUETE/PDF)
+        # Ícone padrão de 'Salvar' do sistema. 
+        # DICA: Se tiver um ícone próprio, use: QIcon("caminho/pdf_icon.png")
+        icon_pdf = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        self.btn_pdf_tool = toolbar.addAction(icon_pdf, "Exportar Laudo PDF")
+        self.btn_pdf_tool.triggered.connect(self.exportar_laudo_pdf)
+        self.btn_pdf_tool.setToolTip("Exportar Laudo Completo em PDF (Ctrl+Shift+E)")
 
     def _handle_calc_action(self):
         """Decide se inicia o Fit ou se interrompe a execução atual."""
