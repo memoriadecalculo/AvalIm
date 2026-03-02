@@ -721,7 +721,8 @@ class MQO:
             )
 
         print(conclusao + "\n")
-        return {"statistic": stat, "pvalue": pvalue}
+        # return {"statistic": stat, "pvalue": pvalue}
+        return pvalue > significancia
 
     def teste_kstest(self, usar_limpo=False, significancia=0.05):
         from scipy.stats import kstest, zscore
@@ -825,7 +826,8 @@ class MQO:
             )
 
         print(conclusao + "\n")
-        return resultado
+        # return resultado
+        return (lm_pvalue > 0.05) and (f_pvalue > 0.05)
 
     def autocorrelacao(self, usar_limpo=False):
         from statsmodels.stats.stattools import durbin_watson
@@ -850,7 +852,8 @@ class MQO:
             )
 
         print(conclusao + "\n")
-        return {"durbin_watson": dw}
+        # return {"durbin_watson": dw}
+        return 1.5 <= dw <= 2.5
 
     def multicolinearidade(self, usar_limpo=False):
         from statsmodels.stats.outliers_influence import variance_inflation_factor
@@ -1173,3 +1176,27 @@ class MQO:
         fig.tight_layout()
         _maybe_show_fig(fig, show)
         return None if show else fig
+
+    def check_normalidade(self, idx, usar_limpo=False):
+        """Verificação silenciosa para o Dashboard."""
+        from scipy.stats import shapiro
+        mdl = self.modelo_limpo if usar_limpo else self.modelos[idx]
+        if mdl is None: return False
+        _, pvalue = shapiro(mdl.resid)
+        return pvalue > 0.05
+
+    def check_homocedasticidade(self, idx, usar_limpo=False):
+        """Verificação silenciosa para o Dashboard."""
+        import statsmodels.stats.api as sms
+        mdl = self.modelo_limpo if usar_limpo else self.modelos[idx]
+        if mdl is None: return False
+        _, p_valor, _, _ = sms.het_breuschpagan(mdl.resid, mdl.model.exog)
+        return p_valor > 0.05
+
+    def check_autocorrelacao(self, idx, usar_limpo=False):
+        """Verificação silenciosa para o Dashboard."""
+        from statsmodels.stats.stattools import durbin_watson
+        mdl = self.modelo_limpo if usar_limpo else self.modelos[idx]
+        if mdl is None: return False
+        dw = durbin_watson(mdl.resid)
+        return 1.5 <= dw <= 2.5

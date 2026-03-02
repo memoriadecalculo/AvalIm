@@ -324,6 +324,38 @@ class DropTableWidget(QTableWidget):
         else:
             event.ignore()
 
+class MetricCard(QFrame):
+    """Um card visual para exibir uma métrica (ex: R2 ou Teste SW)."""
+    def __init__(self, label, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet("""
+            MetricCard {
+                background-color: #2b2b2b;
+                border: 1px solid #444;
+                border-radius: 6px;
+                min-width: 120px;
+            }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(2)
+
+        self.lbl_title = QLabel(label.upper())
+        self.lbl_title.setStyleSheet("color: #aaa; font-size: 9px; font-weight: bold;")
+        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.lbl_value = QLabel("-")
+        self.lbl_value.setStyleSheet("color: #fff; font-size: 14px; font-weight: bold;")
+        self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(self.lbl_title)
+        layout.addWidget(self.lbl_value)
+
+    def set_value(self, text, color="#fff"):
+        self.lbl_value.setText(text)
+        self.lbl_value.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
+
 # ============================================================
 # MainWindow
 # ============================================================
@@ -387,7 +419,30 @@ class MainWindow(QMainWindow):
         self.lbl_status = QLabel("")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.lbl_status)
+        
+        # --- DASHBOARD DE MÉTRICAS ---
+        self.dash_layout = QHBoxLayout()
+        self.dash_layout.setSpacing(10)
+        self.dash_layout.setContentsMargins(0, 5, 0, 10)
 
+        self.card_r2 = MetricCard("R²")
+        self.card_r2_adj = MetricCard("R² Ajustado")
+        self.card_fund = MetricCard("Fundamentação")
+        self.card_norm = MetricCard("Normalidade (SW)")
+        self.card_homoc = MetricCard("Homocedasticidade (BP)")
+        self.card_auto = MetricCard("Autocorrelação (DW)")
+        
+        self.dash_layout.addWidget(self.card_r2)
+        self.dash_layout.addWidget(self.card_r2_adj)
+        self.dash_layout.addWidget(self.card_fund)
+        self.dash_layout.addWidget(self.card_norm)
+        self.dash_layout.addWidget(self.card_homoc)
+        self.dash_layout.addWidget(self.card_auto)
+        self.dash_layout.addStretch() # Empurra tudo para a esquerda
+
+        # Adiciona o layout do dashboard ao layout principal (acima do splitter)
+        layout.addLayout(self.dash_layout)
+        
         # --- SPLITTER PRINCIPAL (DIVISÃO VERTICAL: ESQUERDA | DIREITA) ---
         self.split_main = QSplitter(Qt.Orientation.Horizontal)
         self.split_main.setHandleWidth(10)
@@ -1000,12 +1055,14 @@ class MainWindow(QMainWindow):
 
             self._update_action_states()
             self._refresh_plot_panels()
+            self._update_dashboard()
 
         except Exception as e:
             self.log_action("Selecionar modelo")
             self.log(f"Erro ao selecionar modelo {idx}: {e}")
             # ... (seu código de restauração do spinbox em caso de erro)
-
+        
+        
     def selecionar_modelo(self):
         self.log_action("Selecionar modelo")
 
@@ -2171,3 +2228,57 @@ class MainWindow(QMainWindow):
         else:
             self.fit_model()
 
+    def _update_dashboard(self):
+        if not self.model or self._current_idx() is None:
+            return
+
+        try:
+            usar_limpo = self.usar_limpo()
+            idx = self._current_idx()
+            res = self.model.modelos[idx]
+
+            # 0. R2
+            r2 = res.rsquared
+            cor_r2 = "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336"
+            self.card_r2.set_value(f"{r2:.3f}", cor_r2)
+            
+            # 1. R2 Ajustado
+            r2_adj = res.rsquared_adj
+            cor_r2 = "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336"
+            self.card_r2_adj.set_value(f"{r2_adj:.3f}", cor_r2)
+
+            # 2. Testes Estatísticos (Check ou X)
+            # Normalidade (Shapiro-Wilk) - Geralmente se p > 0.05, OK (V)
+            try:
+                # Aqui você precisaria que seu modelo retornasse o booleano do teste
+                # Exemplo hipotético:
+                is_norm = self.model.check_normalidade(idx, usar_limpo)
+                self.card_norm.set_value("✔" if is_norm else "✘", "#4CAF50" if is_norm else "#F44336")
+                
+                is_homo = self.model.check_homocedasticidade(idx, usar_limpo)
+                self.card_homoc.set_value("✔" if is_homo else "✘", "#4CAF50" if is_homo else "#F44336")
+                
+                is_auto = self.model.check_autocorrelacao(idx, usar_limpo)
+                self.card_auto.set_value("✔" if is_auto else "✘", "#4CAF50" if is_auto else "#F44336")
+            except:
+                pass
+
+            # 3. NBR 14653 (Fundamentação e Precisão)
+            info_nbr = self.model.enquadramento_nbr(usar_limpo=usar_limpo)
+            graus = ["Inidôneo", "I", "II", "III"]
+            
+            # Fundamentação
+            g_fund = info_nbr['fundamentacao']
+            cor_fund = "#4CAF50" if g_fund >= 2 else "#FFC107" if g_fund == 1 else "#F44336"
+            self.card_fund.set_value(graus[g_fund], cor_fund)
+            
+            # Precisão
+            if 'precisao' in info_nbr:
+                g_prec = info_nbr['precisao']
+                cor_prec = "#4CAF50" if g_prec >= 2 else "#FFC107" if g_prec == 1 else "#F44336"
+                self.card_prec.set_value(graus[g_prec], cor_prec)
+            else:
+                self.card_prec.set_value("Pendente", "#888")
+
+        except Exception as e:
+            print(f"Erro ao atualizar dashboard: {e}")
