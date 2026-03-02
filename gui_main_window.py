@@ -501,8 +501,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.table, "Tabela (Resultados)")
         
         # Aba 4: Imóveis Avaliandos (Alvos da Avaliação)
-        self.table_avaliandos = QTableWidget()
+        self.table_avaliandos = DropTableWidget()
         self.tabs.addTab(self.table_avaliandos, "Avaliandos")
+        self.table_avaliandos.fileDropped.connect(self.load_avaliandos_from_path)
         
         # Botão na barra de ferramentas ou menu para carregar os avaliandos
         self.act_load_avaliandos = self._make_action(
@@ -2509,27 +2510,27 @@ class MainWindow(QMainWindow):
         return eq_regressao, eq_estimativa
 
     def load_avaliandos_csv(self):
-        """Abre o diálogo para carregar a planilha de imóveis avaliandos."""
+        """Abre o diálogo manual para carregar a planilha de avaliandos."""
         filtros = "Dados (*.csv *.txt *.tsv *.xls *.xlsx *.ods);;Todos (*.*)"
         path, _ = QFileDialog.getOpenFileName(self, "Carregar Avaliandos", "", filtros)
         
-        if not path:
-            return
+        if path:
+            self.log_action("Carregar Avaliandos")
+            self._process_avaliandos_logic(path)
 
-        self.log_action("Carregar Avaliandos")
+    def _process_avaliandos_logic(self, path: str):
+        """Lógica centralizada que realmente lê o arquivo e preenche a tabela."""
         try:
-            # Reutiliza a lógica de leitura robusta do sistema
+            # Reutiliza a sua leitura robusta (já lida com Excel, CSV, separadores, etc.)
             df_av, info = self._read_table_file(path)
             self.df_avaliandos = df_av
             
-            # Define as colunas de entrada e as colunas de saída (predição)
             cols_originais = list(df_av.columns)
             novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
             
             self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
             self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
             
-            # Preenche os dados originais
             self.table_avaliandos.setRowCount(len(df_av))
             for r in range(len(df_av)):
                 for c in range(len(cols_originais)):
@@ -2537,10 +2538,11 @@ class MainWindow(QMainWindow):
                     text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
                     self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
             
-            self.log(f"Planilha de avaliandos carregada: {len(df_av)} imóveis.")
+            self.log(f"Avaliandos carregados: {len(df_av)} imóveis.")
+            self.log(f"Fonte: {info}")
             self.tabs.setCurrentWidget(self.table_avaliandos)
             
-            # Executa a predição automática se o modelo já existir
+            # Se já tiver um modelo rodando, ele já calcula tudo na hora!
             if self.model:
                 self._update_avaliandos_predictions()
                 
@@ -2623,3 +2625,12 @@ class MainWindow(QMainWindow):
         self.table_avaliandos.blockSignals(False)
         self.table_avaliandos.resizeColumnsToContents()
 
+    def load_avaliandos_from_path(self, path: str):
+        """Processa o arquivo de avaliandos vindo do Drag & Drop."""
+        if not path:
+            return
+
+        self.log_action("Carregar Avaliandos (Drag & Drop)")
+        
+        # Chama a lógica centralizada de processamento
+        self._process_avaliandos_logic(path)
