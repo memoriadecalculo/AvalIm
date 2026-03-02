@@ -2,6 +2,44 @@
 # GUI STYLE — Tema Dark Gray para PyQt6
 # ===============================================================
 
+def load_light_style():
+    return """
+        QMainWindow, QDialog {
+            background-color: #ffffff;
+            color: #000000;
+        }
+        QTabWidget::pane {
+            border: 1px solid #cccccc;
+            background: #ffffff;
+        }
+        QTabBar::tab {
+            background: #f0f0f0;
+            color: #333333;
+            padding: 8px 20px;
+            border: 1px solid #cccccc;
+            border-bottom: none;
+        }
+        QTabBar::tab:selected {
+            background: #ffffff;
+            font-weight: bold;
+        }
+        QPlainTextEdit, QTableWidget {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #dddddd;
+            gridline-color: #eeeeee;
+        }
+        QHeaderView::section {
+            background-color: #f5f5f5;
+            color: #333333;
+            padding: 4px;
+            border: 1px solid #dddddd;
+        }
+        QLabel {
+            color: #333333;
+        }
+    """
+
 def load_dark_style():
     """
     Retorna o stylesheet completo para tema dark moderno.

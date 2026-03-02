@@ -42,7 +42,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from gui_worker import start_worker
 from gui_plot_window import PlotWindow
-from gui_style import load_dark_style
+from gui_style import load_dark_style, load_light_style
 
 from model import MQO
 
@@ -331,8 +331,8 @@ class MetricCard(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             MetricCard {
-                background-color: #2b2b2b;
-                border: 1px solid #444;
+                background-color: #f9f9f9;
+                border: 1px solid #dddddd;
                 border-radius: 6px;
                 min-width: 120px;
             }
@@ -342,11 +342,11 @@ class MetricCard(QFrame):
         layout.setSpacing(2)
 
         self.lbl_title = QLabel(label.upper())
-        self.lbl_title.setStyleSheet("color: #aaa; font-size: 9px; font-weight: bold;")
+        self.lbl_title.setStyleSheet("color: #666666; font-size: 9px; font-weight: bold;")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.lbl_value = QLabel("-")
-        self.lbl_value.setStyleSheet("color: #fff; font-size: 14px; font-weight: bold;")
+        self.lbl_value.setStyleSheet("color: #000000; font-size: 14px; font-weight: bold;")
         self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.lbl_title)
@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Avaliação Imobiliária — AvalIm (MQO)")
         self.setMinimumSize(1100, 780)
-        self.setStyleSheet(load_dark_style())
+        self.setStyleSheet(load_light_style())
 
         # --- Atributos de Estado ---
         self.df = None
@@ -487,8 +487,11 @@ class MainWindow(QMainWindow):
         self.log_box.document().setDefaultFont(mono)
         self.log_box.setStyleSheet("""
             QPlainTextEdit {
+                background-color: #ffffff;
+                color: #000000;
                 font-family: "DejaVu Sans Mono", "Courier New", monospace;
                 font-size: 10pt;
+                border: 1px solid #cccccc;
             }
         """)
         self.tabs.addTab(self.log_box, "Resultados")
@@ -1940,12 +1943,12 @@ class MainWindow(QMainWindow):
             self.log(f"Erro ao enquadrar: {e}")
 
     def exportar_laudo_pdf(self):
-        # Validação inicial
+        # 1. Validação inicial
         if not self.model or self._current_idx() is None:
             QMessageBox.warning(self, "Erro", "Ajuste o modelo antes de exportar o laudo.")
             return
 
-        # Diálogo para salvar o arquivo
+        # 2. Diálogo para salvar o arquivo
         path, _ = QFileDialog.getSaveFileName(self, "Salvar Laudo", "Laudo_AvalIm.pdf", "PDF (*.pdf)")
         if not path:
             return
@@ -1957,124 +1960,133 @@ class MainWindow(QMainWindow):
             import platform
             import subprocess
 
-            # --- FUNÇÃO AUXILIAR PARA ABRIR O PDF (Multiplataforma) ---
             def abrir_documento(caminho):
                 sistema = platform.system()
                 try:
-                    if sistema == "Windows":
-                        os.startfile(caminho)
-                    elif sistema == "Darwin":  # macOS
-                        subprocess.run(["open", caminho], check=True)
-                    else:  # Linux
-                        subprocess.run(["xdg-open", caminho], check=True)
+                    if sistema == "Windows": os.startfile(caminho)
+                    elif sistema == "Darwin": subprocess.run(["open", caminho], check=True)
+                    else: subprocess.run(["xdg-open", caminho], check=True)
                 except Exception as e:
-                    self.log(f"Laudo salvo, mas não foi possível abrir automaticamente: {e}")
+                    self.log(f"Laudo salvo, mas erro ao abrir: {e}")
 
-            # 1. Preparar os dados para o laudo
+            # Preparar dados
             usar_limpo = self.usar_limpo()
             info_nbr = self.model.enquadramento_nbr(
                 usar_limpo=usar_limpo, 
                 amplitude_percentual=getattr(self, "_ultima_amplitude", None)
             )
             graus = ["Inidôneo", "I", "II", "III"]
-            
-            # 2. Gerar gráficos em pasta temporária
+
+            # 3. Gerar gráficos
             with tempfile.TemporaryDirectory() as tmpdir:
-                self.lbl_status.setText("Gerando gráficos para o PDF...")
+                self.lbl_status.setText("Gerando gráficos...")
                 graficos_paths = self.model.salvar_todos_graficos(tmpdir, usar_limpo=usar_limpo)
 
-                # 3. Construir o PDF
+                # 4. Construir o PDF
                 pdf = FPDF()
+                
+                # --- REGISTRO ROBUSTO DE FONTES UNICODE ---
+                font_name = 'DejaVu'
+                try:
+                    # REGULAR
+                    pdf.add_font(font_name, '', 'DejaVuSans.ttf')
+                    
+                    # NEGRITO (Mapeia para o arquivo Bold ou volta para o Regular se não existir)
+                    if os.path.exists('DejaVuSans-Bold.ttf'):
+                        pdf.add_font(font_name, 'B', 'DejaVuSans-Bold.ttf')
+                    else:
+                        pdf.add_font(font_name, 'B', 'DejaVuSans.ttf')
+                        
+                    # ITÁLICO (Mapeia para o arquivo Oblique ou volta para o Regular se não existir)
+                    if os.path.exists('DejaVuSans-Oblique.ttf'):
+                        pdf.add_font(font_name, 'I', 'DejaVuSans-Oblique.ttf')
+                    else:
+                        pdf.add_font(font_name, 'I', 'DejaVuSans.ttf')
+                        
+                except Exception as e:
+                    self.log(f"Aviso: Falha ao carregar DejaVu ({e}). Usando fontes padrão.")
+                    font_name = 'Helvetica'
+
                 pdf.set_auto_page_break(auto=True, margin=15)
                 pdf.add_page()
                 
                 # Título Principal
-                pdf.set_font("Helvetica", "B", 18)
+                pdf.set_font(font_name, "B", 18)
                 pdf.cell(0, 15, "RELATÓRIO DE AVALIAÇÃO IMOBILIÁRIA", ln=True, align="C")
-                pdf.set_font("Helvetica", "I", 10)
+                
+                # Subtítulo (Aqui o estilo "I" agora está seguro!)
+                pdf.set_font(font_name, "I", 10)
                 pdf.cell(0, 5, "Gerado pelo Sistema AvalIm - MQO", ln=True, align="C")
                 pdf.ln(10)
 
                 # Seção 1: Identificação
-                pdf.set_font("Helvetica", "B", 12)
+                pdf.set_font(font_name, "B", 12)
                 pdf.set_fill_color(240, 240, 240)
                 pdf.cell(0, 10, " 1. INFORMAÇÕES DO MODELO", ln=True, fill=True)
-                pdf.set_font("Helvetica", "", 10)
+                pdf.set_font(font_name, "", 10)
                 pdf.ln(2)
-                pdf.cell(0, 7, f"Arquivo de Dados: {os.path.basename(self.csv_path)}", ln=True)
+                pdf.cell(0, 7, f"Arquivo: {os.path.basename(self.csv_path)}", ln=True)
                 pdf.cell(0, 7, f"Variável Dependente (Y): {self.model.preco}", ln=True)
-                pdf.cell(0, 7, f"Tamanho da Amostra: {info_nbr['n']} dados", ln=True)
-                pdf.cell(0, 7, f"Número de Variáveis Independentes: {info_nbr['k']}", ln=True)
+                pdf.cell(0, 7, f"Amostra: {info_nbr['n']} dados | Variáveis: {info_nbr['k']}", ln=True)
                 pdf.ln(5)
 
-                # Seção 2: Enquadramento NBR 14653-2
-                pdf.set_font("Helvetica", "B", 12)
-                pdf.cell(0, 10, " 2. ENQUADRAMENTO DA FUNDAMENTAÇÃO E PRECISÃO", ln=True, fill=True)
-                pdf.set_font("Helvetica", "", 10)
+                # Seção 2: NBR 14653
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 2. ENQUADRAMENTO (FUNDAMENTAÇÃO E PRECISÃO)", ln=True, fill=True)
+                pdf.set_font(font_name, "", 10)
                 pdf.ln(2)
                 pdf.cell(0, 7, f"- Grau de Fundamentação: {graus[info_nbr['fundamentacao']]}", ln=True)
-                
                 if "precisao" in info_nbr:
-                    pdf.cell(0, 7, f"- Grau de Precisão: {graus[info_nbr['precisao']]} (Amplitude: {info_nbr['amplitude']:.2f}%)", ln=True)
-                else:
-                    pdf.cell(0, 7, "- Grau de Precisão: Não calculado (requer predição)", ln=True)
+                    pdf.cell(0, 7, f"- Grau de Precisão: {graus[info_nbr['precisao']]} ({info_nbr['amplitude']:.2f}%)", ln=True)
                 pdf.ln(5)
 
                 # Seção 3: Sumário Estatístico
-                pdf.set_font("Helvetica", "B", 12)
-                pdf.cell(0, 10, " 3. RESULTADOS DO MODELO (Summary)", ln=True, fill=True)
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 3. RESULTADOS ESTATÍSTICOS (Summary)", ln=True, fill=True)
                 pdf.ln(2)
-                pdf.set_font("Courier", "", 8)
+                pdf.set_font(font_name, "", 8)
                 texto_resumo = self.model.resumo(usar_limpo=usar_limpo)
                 pdf.multi_cell(0, 4, texto_resumo)
                 pdf.ln(5)
                 
-                # Seção: Equações do Modelo
-                pdf.set_font("Helvetica", "B", 12)
-                pdf.cell(0, 10, " 3. EQUAÇÕES DO MODELO", ln=True, fill=True)
-                pdf.set_font("Courier", "B", 9)
-                
+                # Seção 4: Equações (√ e ² agora permitidos)
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 4. EQUAÇÕES DO MODELO", ln=True, fill=True)
+                pdf.set_font(font_name, "", 9)
                 eq_reg, eq_est = self._get_equacoes_texto(self._current_idx())
-                
                 pdf.ln(2)
-                pdf.set_text_color(100, 100, 100) # Cinza para a regressão
+                pdf.set_text_color(100, 100, 100) # Regressão em cinza
                 pdf.multi_cell(0, 5, f"Regressão: {eq_reg}")
                 pdf.ln(2)
-                pdf.set_text_color(0, 0, 0) # Preto para a estimativa (mais importante)
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_font(font_name, "B", 10) # Estimativa em negrito
                 pdf.multi_cell(0, 5, f"Estimativa: {eq_est}")
+                pdf.set_text_color(0, 0, 0)
                 pdf.ln(5)
                 
-                # Seção 4: Anexos Gráficos (em novas páginas)
+                # Seção 5: Gráficos
                 pdf.add_page()
-                pdf.set_font("Helvetica", "B", 14)
-                pdf.cell(0, 10, "4. ANEXOS GRÁFICOS", ln=True, align="C")
+                pdf.set_font(font_name, "B", 14)
+                pdf.cell(0, 10, "5. ANEXOS GRÁFICOS", ln=True, align="C")
                 pdf.ln(5)
 
-                # Organiza 2 gráficos por página para melhor visualização
                 y_pos = 30
-                for i, (nome_grafico, g_path) in enumerate(graficos_paths.items()):
+                for i, (nome, g_path) in enumerate(graficos_paths.items()):
                     if i > 0 and i % 2 == 0:
                         pdf.add_page()
                         y_pos = 20
-                    
-                    pdf.set_font("Helvetica", "B", 10)
-                    pdf.cell(0, 10, f"Gráfico: {nome_grafico.upper()}", ln=True)
+                    pdf.set_font(font_name, "B", 10)
+                    pdf.cell(0, 10, f"Gráfico: {nome.upper()}", ln=True)
                     pdf.image(g_path, x=15, y=y_pos + 10, w=180)
-                    y_pos += 125  # Pula para a metade de baixo ou próxima página
+                    y_pos += 125
 
-                # Gerar o arquivo final
                 pdf.output(path)
-                self.lbl_status.setText(f"Laudo exportado: {os.path.basename(path)}")
-                
-                QMessageBox.information(self, "Sucesso", f"O laudo foi gerado com sucesso em:\n{path}")
-                
-                # Abre o documento usando a lógica multiplataforma
+                self.lbl_status.setText(f"Laudo exportado com sucesso!")
+                QMessageBox.information(self, "Sucesso", "O laudo PDF foi gerado!")
                 abrir_documento(path)
 
-        except ImportError:
-            QMessageBox.critical(self, "Erro", "Biblioteca 'fpdf2' não encontrada. Instale com: pip install fpdf2")
         except Exception as e:
-            self.log(f"Erro ao exportar PDF: {e}")
+            self.log(f"Erro na exportação: {e}")
             QMessageBox.critical(self, "Erro", f"Falha na exportação: {e}")
 
     def _fill_table_from_df(self, table_widget: QTableWidget, df: pd.DataFrame):
