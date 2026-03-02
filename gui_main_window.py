@@ -26,12 +26,13 @@
 
 import os
 import pandas as pd
+import numpy as np
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QProgressBar, QPlainTextEdit, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QDialog, QPushButton,
-    QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter
+    QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QAction, QKeySequence
@@ -302,66 +303,47 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 780)
         self.setStyleSheet(load_dark_style())
 
+        # --- Atributos de Estado ---
         self.df = None
         self.model = None
         self.preco = None
-        self.csv_path = None  # mantido por compatibilidade (agora é caminho do "arquivo de dados")
-
+        self.csv_path = None
         self.outliers_lim = 2.0
         self.R2_alvo = 0.75
-
-        # Estado "usar_limpo"
         self._usar_limpo_flag = False
-
-        # Flag: só habilita "Usar o modelo sem outliers?" após rodar Limpar Outliers no idx atual
         self._limpo_ready = False
         self._limpo_ready_idx = None
-
         self.threads = []
         self.plot_windows = []
-
         self._current_fit_thread = None
         self._updating_model_spin = False
-
         self._plots_job_id = 0
         self._split_sizes_applied = False
-
-        # Threads "bloqueantes" (fit / outliers) para controle de menus
         self._blocking_threads = set()
+        self._ultima_amplitude = None
 
         self._build_menus()
 
+        # Widget Central e Layout Raiz
         container = QWidget()
         layout = QVBoxLayout(container)
         self.setCentralWidget(container)
 
-        # ---------------------------------------------------------
-        # LINHA 1 — Arquivo + Modelo spin
-        # ---------------------------------------------------------
+        # --- LINHA 1: Controles Superiores (Arquivo e Seletor de Modelo) ---
         linha1 = QHBoxLayout()
-
         self.lbl_arquivo = QLabel("Arquivo: (nenhum)")
         self.lbl_arquivo.setToolTip("Arquivo de dados carregado.")
         linha1.addWidget(self.lbl_arquivo)
 
         linha1.addStretch()
 
-        self.lbl_modelo = QLabel("Modelo:")
-        linha1.addWidget(self.lbl_modelo)
-
+        linha1.addWidget(QLabel("Modelo:"))
         self.spin_modelo = QSpinBox()
         self.spin_modelo.setMinimum(0)
         self.spin_modelo.setMaximum(0)
-        self.spin_modelo.setValue(0)
         self.spin_modelo.setEnabled(False)
         self.spin_modelo.setKeyboardTracking(False)
-
         self.spin_modelo.valueChanged.connect(self._on_model_spin_value_changed)
-        self.spin_modelo.editingFinished.connect(self._on_model_spin_commit)
-        le = self.spin_modelo.lineEdit()
-        if le is not None:
-            le.returnPressed.connect(self._on_model_spin_commit)
-
         linha1.addWidget(self.spin_modelo)
         layout.addLayout(linha1)
 
@@ -372,93 +354,87 @@ class MainWindow(QMainWindow):
         self.lbl_status = QLabel("")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.lbl_status)
-        
-        self._ultima_amplitude = None
-        
+
+        # --- SPLITTER PRINCIPAL (DIVISÃO VERTICAL: ESQUERDA | DIREITA) ---
+        self.split_main = QSplitter(Qt.Orientation.Horizontal)
+        self.split_main.setHandleWidth(10)
+
         # ---------------------------------------------------------
-        # Tabs (Resultados / Tabela)
+        # 1. LADO ESQUERDO: Abas (Dados, Resultados, Tabela)
         # ---------------------------------------------------------
+        self.scroll_left = QScrollArea()
+        self.scroll_left.setWidgetResizable(True)
+        self.scroll_left.setFrameShape(QFrame.Shape.NoFrame)
+        
         self.tabs = QTabWidget()
         
-        # Nova Tabela para Dados Brutos
+        # Aba 1: Dados Brutos
         self.table_dados = QTableWidget()
         self.table_dados.setSortingEnabled(True)
-        self.tabs.addTab(self.table_dados, "Dados") # Será a primeira aba
+        self.tabs.addTab(self.table_dados, "Dados")
 
+        # Aba 2: Resultados (ESTILIZADA COM FONTE MONOESPAÇADA)
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
+        # IMPORTANTE: Desativa quebra de linha para não bagunçar as tabelas
         self.log_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
+        # Configuração rigorosa da fonte para alinhamento de colunas
         mono = QFont("DejaVu Sans Mono", 10)
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self.log_box.setFont(mono)
         self.log_box.document().setDefaultFont(mono)
         self.log_box.setStyleSheet("""
-        QPlainTextEdit {
-            font-family: "DejaVu Sans Mono";
-            font-size: 10pt;
-        }
+            QPlainTextEdit {
+                font-family: "DejaVu Sans Mono", "Courier New", monospace;
+                font-size: 10pt;
+            }
         """)
         self.tabs.addTab(self.log_box, "Resultados")
 
+        # Aba 3: Tabela de Resultados
         self.table = QTableWidget()
         self.table.setSortingEnabled(True)
         self.tabs.addTab(self.table, "Tabela (Resultados)")
+
+        self.scroll_left.setWidget(self.tabs)
+        self.split_main.addWidget(self.scroll_left)
+
+        # ---------------------------------------------------------
+        # 2. LADO DIREITO: Pilha de Gráficos com Scroll
+        # ---------------------------------------------------------
+        self.scroll_right = QScrollArea()
+        self.scroll_right.setWidgetResizable(True)
+        self.scroll_right.setFrameShape(QFrame.Shape.NoFrame)
         
-        # ---------------------------------------------------------
-        # Área de figuras (splitters 2x3)
-        # ---------------------------------------------------------
-        self.plots_root = QWidget()
-        plots_root_layout = QVBoxLayout(self.plots_root)
-        plots_root_layout.setContentsMargins(0, 0, 0, 0)
-        plots_root_layout.setSpacing(0)
+        self.plots_container = QWidget()
+        self.plots_layout = QVBoxLayout(self.plots_container)
+        self.plots_layout.setContentsMargins(5, 5, 5, 5)
+        self.plots_layout.setSpacing(20)
 
-        self.split_rows = QSplitter(Qt.Orientation.Vertical)
-        self.split_rows.setHandleWidth(6)
+        # Instanciação dos Painéis na ordem solicitada:
+        self.panel_box = FigurePanel("box", "Boxplot", self._open_plot_from_panel)
+        self.panel_graficos = FigurePanel("graficos", "Gráficos (Modelo)", self._open_plot_from_panel)
+        self.panel_residuos = FigurePanel("residuos", "Resíduos Padronizados", self._open_plot_from_panel)
+        # NOVO: Distância de Cook inserida após os Resíduos
+        self.panel_cooks = FigurePanel("cooks", "Distância de Cook", self._open_plot_from_panel)
+        self.panel_corr = FigurePanel("corr", "Matriz de Correlação", self._open_plot_from_panel)
+        self.panel_aderencia = FigurePanel("aderencia", "Aderência", self._open_plot_from_panel)
+        self.panel_hist = FigurePanel("hist", "Histograma", self._open_plot_from_panel)
 
-        self.split_row_1 = QSplitter(Qt.Orientation.Horizontal)
-        self.split_row_1.setHandleWidth(6)
+        # Adiciona os painéis ao layout vertical da direita (Pilha)
+        self.plots_layout.addWidget(self.panel_box)
+        self.plots_layout.addWidget(self.panel_graficos)
+        self.plots_layout.addWidget(self.panel_residuos)
+        self.plots_layout.addWidget(self.panel_cooks)
+        self.plots_layout.addWidget(self.panel_corr)
+        self.plots_layout.addWidget(self.panel_aderencia)
+        self.plots_layout.addWidget(self.panel_hist)
 
-        self.split_row_2 = QSplitter(Qt.Orientation.Horizontal)
-        self.split_row_2.setHandleWidth(6)
+        self.scroll_right.setWidget(self.plots_container)
+        self.split_main.addWidget(self.scroll_right)
 
-        self.panel_box = FigurePanel("box", "Boxplot", open_request=self._open_plot_from_panel)
-        self.panel_graficos = FigurePanel("graficos", "Gráficos (Modelo)", open_request=self._open_plot_from_panel)
-        self.panel_residuos = FigurePanel("residuos", "Resíduos Padronizados (MQO)", open_request=self._open_plot_from_panel)
-
-        self.panel_corr = FigurePanel("corr", "Matriz de Correlação", open_request=self._open_plot_from_panel)
-        self.panel_aderencia = FigurePanel("aderencia", "Aderência - MQO", open_request=self._open_plot_from_panel)
-        self.panel_hist = FigurePanel("hist", "Histograma dos Resíduos", open_request=self._open_plot_from_panel)
-
-        self.split_row_1.addWidget(self.panel_box)
-        self.split_row_1.addWidget(self.panel_graficos)
-        self.split_row_1.addWidget(self.panel_residuos)
-
-        self.split_row_2.addWidget(self.panel_corr)
-        self.split_row_2.addWidget(self.panel_aderencia)
-        self.split_row_2.addWidget(self.panel_hist)
-
-        for i in range(3):
-            self.split_row_1.setStretchFactor(i, 1)
-            self.split_row_2.setStretchFactor(i, 1)
-
-        self.split_rows.addWidget(self.split_row_1)
-        self.split_rows.addWidget(self.split_row_2)
-        self.split_rows.setStretchFactor(0, 1)
-        self.split_rows.setStretchFactor(1, 1)
-
-        plots_root_layout.addWidget(self.split_rows, 1)
-
-        # ---------------------------------------------------------
-        # Split principal
-        # ---------------------------------------------------------
-        self.split_main = QSplitter(Qt.Orientation.Vertical)
-        self.split_main.setHandleWidth(8)
-        self.split_main.addWidget(self.tabs)
-        self.split_main.addWidget(self.plots_root)
-        self.split_main.setStretchFactor(0, 4)
-        self.split_main.setStretchFactor(1, 6)
-
+        # Adiciona o Splitter ao layout principal
         layout.addWidget(self.split_main, 1)
 
         self._update_action_states()
@@ -773,6 +749,8 @@ class MainWindow(QMainWindow):
                 fig = self.model.graficos(usar_limpo=usar_limpo, show=False)
             elif key == "residuos":
                 fig = self.model.residuos_grafico(usar_limpo=usar_limpo, show=False)
+            elif key == "cooks":
+                fig = self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False)
             elif key == "corr":
                 fig = self.model.matrix_corr(usar_limpo=usar_limpo, show=False)
             elif key == "aderencia":
@@ -807,14 +785,12 @@ class MainWindow(QMainWindow):
 
         self._plots_job_id += 1
         job_id = self._plots_job_id
-        self.lbl_status.setText("Atualizando gráficos...")
+        self.lbl_status.setText("Atualizando pilha de gráficos...")
 
         QTimer.singleShot(0, lambda: self._make_all_plots_main(job_id))
 
     def _make_all_plots_main(self, job_id: int):
-        if job_id != self._plots_job_id:
-            return
-        if not self.model:
+        if job_id != self._plots_job_id or not self.model:
             return
 
         usar_limpo = self.usar_limpo()
@@ -828,28 +804,29 @@ class MainWindow(QMainWindow):
                 figs[name] = None
                 errs[name] = str(e)
 
+        # Geração de todos os gráficos, incluindo o novo de Cook
         safe("box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False))
         safe("graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False))
         safe("residuos", lambda: self.model.residuos_grafico(usar_limpo=usar_limpo, show=False))
-
+        safe("cooks", lambda: self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False))
         safe("corr", lambda: self.model.matrix_corr(usar_limpo=usar_limpo, show=False))
         safe("aderencia", lambda: self.model.aderencia(usar_limpo=usar_limpo, show=False))
         safe("hist", lambda: self.model.histograma(usar_limpo=usar_limpo, show=False))
 
+        # Atribuição aos painéis
         self.panel_box.set_figure(figs.get("box"))
         self.panel_graficos.set_figure(figs.get("graficos"))
         self.panel_residuos.set_figure(figs.get("residuos"))
-
+        self.panel_cooks.set_figure(figs.get("cooks"))
         self.panel_corr.set_figure(figs.get("corr"))
         self.panel_aderencia.set_figure(figs.get("aderencia"))
         self.panel_hist.set_figure(figs.get("hist"))
 
         if errs:
             for k, msg in errs.items():
-                self.log_action(f"Erro no gráfico: {k}")
-                self.log(msg)
+                self.log(f"⚠️ Erro no gráfico '{k}': {msg}")
 
-        self.lbl_status.setText("Gráficos atualizados.")
+        self.lbl_status.setText("Pilha de gráficos atualizada.")
 
     # ============================================================
     # SPINBOX "Modelo"
@@ -1980,3 +1957,29 @@ class MainWindow(QMainWindow):
             if cell:
                 cell.setForeground(color)
 
+    def resizeEvent(self, event):
+        """Força os gráficos a terem 50% da altura da janela para garantir o scroll."""
+        super().resizeEvent(event)
+        
+        # Calcula a altura alvo (metade da área visível da janela)
+        altura_alvo = self.height() // 2
+        
+        # Aplica a altura mínima a todos os painéis da pilha
+        paineis = [
+            self.panel_box, self.panel_graficos, self.panel_residuos,
+            self.panel_cooks, self.panel_corr, self.panel_aderencia, self.panel_hist
+        ]
+        
+        for p in paineis:
+            p.setMinimumHeight(altura_alvo)
+
+    def showEvent(self, event):
+        """Define as proporções iniciais do splitter horizontal."""
+        super().showEvent(event)
+        if self._split_sizes_applied:
+            return
+        self._split_sizes_applied = True
+
+        # Divide a tela ao meio verticalmente (50% Abas | 50% Gráficos)
+        largura = self.width()
+        self.split_main.setSizes([largura // 2, largura // 2])
