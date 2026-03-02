@@ -1068,9 +1068,15 @@ class MainWindow(QMainWindow):
                         sinal = " + " if val >= 0 else " - "
                         equacao += f"{sinal}{abs(val):.6f} * {x_form}"
                 
-                self.log_sep("EQUAÇÃO DE REGRESSÃO")
-                self.log(equacao)
+                # --- GERAÇÃO DAS EQUAÇÕES (Regressão e Estimativa) ---
+                eq_reg, eq_est = self._get_equacoes_texto(idx)
+                
+                self.log_sep("EQUAÇÃO DE REGRESSÃO (Espaço Estatístico)")
+                self.log(eq_reg)
+                self.log_sep("EQUAÇÃO ESTIMATIVA (Espaço de Valor)")
+                self.log(eq_est)
                 self.log_sep()
+                
             except Exception as e_eq:
                 self.log(f"Aviso: Falha na equação: {e_eq}")
 
@@ -2022,7 +2028,22 @@ class MainWindow(QMainWindow):
                 texto_resumo = self.model.resumo(usar_limpo=usar_limpo)
                 pdf.multi_cell(0, 4, texto_resumo)
                 pdf.ln(5)
-
+                
+                # Seção: Equações do Modelo
+                pdf.set_font("Helvetica", "B", 12)
+                pdf.cell(0, 10, " 3. EQUAÇÕES DO MODELO", ln=True, fill=True)
+                pdf.set_font("Courier", "B", 9)
+                
+                eq_reg, eq_est = self._get_equacoes_texto(self._current_idx())
+                
+                pdf.ln(2)
+                pdf.set_text_color(100, 100, 100) # Cinza para a regressão
+                pdf.multi_cell(0, 5, f"Regressão: {eq_reg}")
+                pdf.ln(2)
+                pdf.set_text_color(0, 0, 0) # Preto para a estimativa (mais importante)
+                pdf.multi_cell(0, 5, f"Estimativa: {eq_est}")
+                pdf.ln(5)
+                
                 # Seção 4: Anexos Gráficos (em novas páginas)
                 pdf.add_page()
                 pdf.set_font("Helvetica", "B", 14)
@@ -2419,4 +2440,46 @@ class MainWindow(QMainWindow):
         # Atualiza Dashboard e Gráficos instantaneamente
         self._update_dashboard()
         self._refresh_plot_panels()
+
+    def _get_equacoes_texto(self, idx):
+        """Retorna uma tupla (equacao_regressao, equacao_estimativa)."""
+        if not self.model: return "", ""
+        
+        res = self.model.modelos[idx]
+        params = res.params
+        comb = self.model.combinacoes[idx]
+        colunas = list(self.model.colunas)
+        y_name = self.model.preco
+        y_idx = colunas.index(y_name)
+        t_y = int(comb[y_idx])
+
+        # 1. Monta o Lado Direito (RHS) comum a ambas
+        b0 = params.get('const', 0)
+        rhs = f"{b0:.6f}"
+        for i, col in enumerate(colunas):
+            if col == y_name: continue
+            if col in params:
+                val = params[col]
+                x_form = self.model.transformada_print(int(comb[i]), col)
+                sinal = " + " if val >= 0 else " - "
+                rhs += f"{sinal}{abs(val):.6f} * {x_form}"
+
+        # 2. Equação de Regressão (Escala Transformada)
+        y_transf = self.model.transformada_print(t_y, y_name)
+        eq_regressao = f"{y_transf} = {rhs}"
+
+        # 3. Equação Estimativa (Escala Original de Moeda)
+        # Aplicamos a "casca" da função inversa dependendo do t_y
+        inversas = {
+            0: f"{y_name} = {rhs}",
+            1: f"{y_name} = 1 / [{rhs}]",
+            2: f"{y_name} = e^[{rhs}]",
+            3: f"{y_name} = sqrt[{rhs}]",
+            4: f"{y_name} = [{rhs}]^2",
+            5: f"{y_name} = 1 / sqrt[{rhs}]",
+            6: f"{y_name} = 1 / [{rhs}]^2"
+        }
+        eq_estimativa = inversas.get(t_y, f"{y_name} = f^-1[{rhs}]")
+
+        return eq_regressao, eq_estimativa
 
