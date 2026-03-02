@@ -2261,7 +2261,7 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        # 1. CARREGAR DADOS (+)
+        # CARREGAR DADOS (+)
         # Usamos o ícone de 'Adicionar' ou 'Abrir' do sistema
         icon_add = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
         # Se você tiver um arquivo: icon_add = QIcon("caminho/para/mais.png")
@@ -2269,16 +2269,22 @@ class MainWindow(QMainWindow):
         act_toolbar_load.triggered.connect(self.load_csv)
         act_toolbar_load.setToolTip("Carregar Dados (Arquivo ou Arrastar)")
         
-        # 2. DEFINIR VARIÁVEL DEPENDENTE (NOVO)
+        # Botão para Carregar Avaliandos
+        icon_av = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        self.btn_load_av_tool = toolbar.addAction(icon_av, "Carregar Avaliandos")
+        self.btn_load_av_tool.triggered.connect(self.load_avaliandos_csv)
+        self.btn_load_av_tool.setToolTip("Carregar Planilha de Avaliandos (Ctrl+Shift+A)")
+        
+        toolbar.addSeparator()
+
+        # DEFINIR VARIÁVEL DEPENDENTE (NOVO)
         # Ícone que remete a uma lista de escolha/detalhes
         icon_dep = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         self.btn_dep_tool = toolbar.addAction(icon_dep, "Definir Variável Dependente (Y)")
         self.btn_dep_tool.triggered.connect(self.set_preco)
         self.btn_dep_tool.setToolTip("Escolher qual coluna é o Preço/Valor (Y)")
         
-        toolbar.addSeparator()
-
-        # 2. CALCULAR (RAIO)
+        # CALCULAR (RAIO)
         # Usamos o ícone de 'Play' do sistema como padrão para 'Calcular'
         icon_calc = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         # Se você tiver um arquivo: icon_calc = QIcon("caminho/para/raio.png")
@@ -2286,7 +2292,7 @@ class MainWindow(QMainWindow):
         self.btn_calc_tool.triggered.connect(self._handle_calc_action)
         self.btn_calc_tool.setToolTip("Executar Cálculo MQO (F5)")
         
-        # 4. LIMPAR OUTLIERS (NOVO)
+        # LIMPAR OUTLIERS (NOVO)
         # Ícone que remete a limpeza/saneamento
         icon_clean = self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
         self.btn_clean_tool = toolbar.addAction(icon_clean, "Limpar Outliers")
@@ -2294,7 +2300,9 @@ class MainWindow(QMainWindow):
         self.btn_clean_tool.triggered.connect(self.run_outliers_exc)
         self.btn_clean_tool.setToolTip("Remover outliers automaticamente para melhorar o R²")
         
-        # 3. PREDIZER VALOR (LUPA)
+        toolbar.addSeparator()
+        
+        # PREDIZER VALOR (LUPA)
         # Usamos o ícone de 'Busca/Lupa' do sistema
         icon_search = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
         # Se você tiver um arquivo: icon_search = QIcon("caminho/para/lupa.png")
@@ -2314,15 +2322,6 @@ class MainWindow(QMainWindow):
         self.btn_pdf_tool.triggered.connect(self.exportar_laudo_pdf)
         self.btn_pdf_tool.setToolTip("Exportar Laudo Completo em PDF (Ctrl+Shift+E)")
         
-        toolbar = self.findChild(QToolBar) # Localiza a toolbar existente
-        toolbar.addSeparator()
-
-        # Botão para Carregar Avaliandos
-        icon_av = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
-        self.btn_load_av_tool = toolbar.addAction(icon_av, "Carregar Avaliandos")
-        self.btn_load_av_tool.triggered.connect(self.load_avaliandos_csv)
-        self.btn_load_av_tool.setToolTip("Carregar Planilha de Avaliandos (Ctrl+Shift+A)")
-    
     def _handle_calc_action(self):
         """Decide se inicia o Fit ou se interrompe a execução atual."""
         is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
