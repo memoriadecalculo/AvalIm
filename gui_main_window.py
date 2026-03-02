@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
     QLabel, QProgressBar, QPlainTextEdit, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QDialog, QPushButton,
     QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter,
-    QScrollArea, QToolBar, QStyle
+    QScrollArea, QToolBar, QStyle, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon
@@ -410,6 +410,15 @@ class MainWindow(QMainWindow):
         self.spin_modelo.setKeyboardTracking(False)
         self.spin_modelo.valueChanged.connect(self._on_model_spin_value_changed)
         linha1.addWidget(self.spin_modelo)
+        
+        # --- ADICIONADO AQUI: Checkbox ao lado do Spinbox ---
+        self.chk_sem_outliers = QCheckBox("Sem outliers")
+        self.chk_sem_outliers.setEnabled(False)
+        self.chk_sem_outliers.setToolTip("Alternar visualização entre modelo bruto e saneado")
+        self.chk_sem_outliers.toggled.connect(self._on_chk_outliers_toggled)
+        linha1.addWidget(self.chk_sem_outliers)
+        # ----------------------------------------------------
+        
         layout.addLayout(linha1)
 
         self.progress = QProgressBar()
@@ -697,7 +706,7 @@ class MainWindow(QMainWindow):
         has_any_fit = has_model and (getattr(self.model, "r2s", None) is not None) and (len(getattr(self.model, "r2s", [])) > 0)
 
         is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
-
+        
         # habilita "usar_limpo" somente se:
         # - já houve fit
         # - e o usuário rodou Limpar Outliers no idx atual
@@ -760,9 +769,27 @@ class MainWindow(QMainWindow):
                 self._updating_model_spin = False
 
         is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
+        
+        # Verifica se o modelo limpo está pronto e pertence ao modelo atual
+        limpo_disponivel = self._limpo_ready and (self._limpo_ready_idx == self._current_idx())
+
+        if hasattr(self, 'chk_sem_outliers'):
+            # Só habilita se não estiver calculando e o modelo limpo existir
+            self.chk_sem_outliers.setEnabled(not is_running and limpo_disponivel)
+            
+            # Garante que a marcação visual da checkbox esteja correta (sem disparar sinais)
+            self.chk_sem_outliers.blockSignals(True)
+            self.chk_sem_outliers.setChecked(self._usar_limpo_flag)
+            self.chk_sem_outliers.blockSignals(False)
+        
         has_df = self.df is not None
         has_any_fit = self.model is not None and len(getattr(self.model, "r2s", [])) > 0
-
+        
+        # Controle do botão de Variável Dependente na Toolbar
+        if hasattr(self, 'btn_dep_tool'):
+            # Habilita se houver dados e não estiver no meio de um cálculo
+            self.btn_dep_tool.setEnabled(has_df and not is_running)
+        
         if hasattr(self, 'btn_calc_tool'):
             if is_running:
                 # MODO STOP: Execução ativa, habilitamos para cancelar
@@ -779,7 +806,12 @@ class MainWindow(QMainWindow):
                 self.btn_calc_tool.setToolTip("Executar Cálculo MQO (F5)")
                 # Habilitado apenas se houver dados carregados
                 self.btn_calc_tool.setEnabled(has_df)
-
+        
+        # Controle do botão Limpar Outliers na Toolbar
+        if hasattr(self, 'btn_clean_tool'):
+            # Só habilita se não estiver calculando e se houver um modelo para limpar
+            self.btn_clean_tool.setEnabled(not is_running and has_any_fit)
+        
         if hasattr(self, 'btn_predict_tool'):
             # Lupa desabilitada enquanto calcula ou se não houver modelo
             self.btn_predict_tool.setEnabled(not is_running and has_any_fit)
@@ -2188,7 +2220,14 @@ class MainWindow(QMainWindow):
         act_toolbar_load = toolbar.addAction(icon_add, "Carregar Dados")
         act_toolbar_load.triggered.connect(self.load_csv)
         act_toolbar_load.setToolTip("Carregar Dados (Arquivo ou Arrastar)")
-
+        
+        # 2. DEFINIR VARIÁVEL DEPENDENTE (NOVO)
+        # Ícone que remete a uma lista de escolha/detalhes
+        icon_dep = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        self.btn_dep_tool = toolbar.addAction(icon_dep, "Definir Variável Dependente (Y)")
+        self.btn_dep_tool.triggered.connect(self.set_preco)
+        self.btn_dep_tool.setToolTip("Escolher qual coluna é o Preço/Valor (Y)")
+        
         toolbar.addSeparator()
 
         # 2. CALCULAR (RAIO)
@@ -2198,7 +2237,15 @@ class MainWindow(QMainWindow):
         self.btn_calc_tool = toolbar.addAction(icon_calc, "Calcular (Fit MQO)")
         self.btn_calc_tool.triggered.connect(self._handle_calc_action)
         self.btn_calc_tool.setToolTip("Executar Cálculo MQO (F5)")
-
+        
+        # 4. LIMPAR OUTLIERS (NOVO)
+        # Ícone que remete a limpeza/saneamento
+        icon_clean = self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+        self.btn_clean_tool = toolbar.addAction(icon_clean, "Limpar Outliers")
+        # Conectamos à sua função de execução de exclusão
+        self.btn_clean_tool.triggered.connect(self.run_outliers_exc)
+        self.btn_clean_tool.setToolTip("Remover outliers automaticamente para melhorar o R²")
+        
         # 3. PREDIZER VALOR (LUPA)
         # Usamos o ícone de 'Busca/Lupa' do sistema
         icon_search = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
@@ -2235,23 +2282,34 @@ class MainWindow(QMainWindow):
         try:
             usar_limpo = self.usar_limpo()
             idx = self._current_idx()
-            res = self.model.modelos[idx]
+            
+            # --- LÓGICA DE SELEÇÃO DO MODELO ---
+            # Se a flag "Sem outliers" estiver ativa e o modelo limpo existir, usamos ele.
+            # Caso contrário, usamos o modelo bruto do índice atual.
+            if usar_limpo and self.model.modelo_limpo:
+                res = self.model.modelo_limpo
+            else:
+                res = self.model.modelos[idx]
+            
+            # A LINHA REDUNDANTE FOI REMOVIDA DAQUI
+            # ----------------------------------------------
 
-            # 0. R2
+            if res is None:
+                return
+
+            # 0. Coeficiente de Determinação ($R^2$)
             r2 = res.rsquared
             cor_r2 = "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336"
-            self.card_r2.set_value(f"{r2:.3f}", cor_r2)
+            self.card_r2.set_value(f"{r2:.4f}", cor_r2)
             
-            # 1. R2 Ajustado
+            # 1. $R^2$ Ajustado ($R^2_{adj}$)
             r2_adj = res.rsquared_adj
-            cor_r2 = "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336"
-            self.card_r2_adj.set_value(f"{r2_adj:.3f}", cor_r2)
+            cor_r2_adj = "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336"
+            self.card_r2_adj.set_value(f"{r2_adj:.4f}", cor_r2_adj)
 
             # 2. Testes Estatísticos (Check ou X)
-            # Normalidade (Shapiro-Wilk) - Geralmente se p > 0.05, OK (V)
             try:
-                # Aqui você precisaria que seu modelo retornasse o booleano do teste
-                # Exemplo hipotético:
+                # O model.py gerencia se usa o resíduo limpo ou bruto com base na flag
                 is_norm = self.model.check_normalidade(idx, usar_limpo)
                 self.card_norm.set_value("✔" if is_norm else "✘", "#4CAF50" if is_norm else "#F44336")
                 
@@ -2260,11 +2318,14 @@ class MainWindow(QMainWindow):
                 
                 is_auto = self.model.check_autocorrelacao(idx, usar_limpo)
                 self.card_auto.set_value("✔" if is_auto else "✘", "#4CAF50" if is_auto else "#F44336")
-            except:
-                pass
+            except Exception as e_tests:
+                print(f"Erro nos testes: {e_tests}")
 
             # 3. NBR 14653 (Fundamentação e Precisão)
-            info_nbr = self.model.enquadramento_nbr(usar_limpo=usar_limpo)
+            info_nbr = self.model.enquadramento_nbr(
+                usar_limpo=usar_limpo, 
+                amplitude_percentual=getattr(self, "_ultima_amplitude", None)
+            )
             graus = ["Inidôneo", "I", "II", "III"]
             
             # Fundamentação
@@ -2273,12 +2334,89 @@ class MainWindow(QMainWindow):
             self.card_fund.set_value(graus[g_fund], cor_fund)
             
             # Precisão
-            if 'precisao' in info_nbr:
-                g_prec = info_nbr['precisao']
-                cor_prec = "#4CAF50" if g_prec >= 2 else "#FFC107" if g_prec == 1 else "#F44336"
-                self.card_prec.set_value(graus[g_prec], cor_prec)
-            else:
-                self.card_prec.set_value("Pendente", "#888")
+            # if 'precisao' in info_nbr:
+            #     g_prec = info_nbr['precisao']
+            #     cor_prec = "#4CAF50" if g_prec >= 2 else "#FFC107" if g_prec == 1 else "#F44336"
+            #     self.card_prec.set_value(graus[g_prec], cor_prec)
+            # else:
+            #     self.card_prec.set_value("Pendente", "#888")
 
         except Exception as e:
             print(f"Erro ao atualizar dashboard: {e}")
+
+    def run_outliers_exc(self):
+        """Inicia o processo de exclusão iterativa de outliers via Thread."""
+        if not self.model:
+            return
+
+        self.log_action("Limpar Outliers (Iterativo)")
+        self.lbl_status.setText("Saneando amostra...")
+        
+        # Usamos o padrão de worker que você já possui no projeto
+        # Passamos o R2_alvo (ex: 0.75) que você definiu no __init__
+        th = start_worker(
+            self.model.outliers_exc,
+            self.log,
+            self.progress_slot,
+            callback=self._on_outliers_finished,
+            kwargs={
+                "R2_alvo": self.R2_alvo, 
+                "out_lim": 0.2,   # Limite máximo de 20% da amostra
+                "conv_lim": 0.5   # Critério de convergência
+            },
+            owner=self
+        )
+        self.threads.append(th)
+        self._register_blocking_thread(th)
+
+    def _on_outliers_finished(self, result):
+        """Atualiza a interface após a remoção dos outliers."""
+        if not result:
+            self.lbl_status.setText("Limpeza de outliers falhou ou foi cancelada.")
+            self._update_action_states() # Garante reabilitação mesmo em falha
+            return
+
+        # Desempacota o retorno do model.py
+        amostra_limpa, modelo_limpo, amostra_limpa_orig, removidos = result
+
+        self.log(f"Saneamento concluído. Outliers removidos: {removidos}")
+        self.lbl_status.setText(f"Concluído: {removidos} removidos.")
+
+        # Marca que o modelo 'limpo' está pronto para ser usado nos gráficos/dashboard
+        self._limpo_ready = True
+        self._limpo_ready_idx = self._current_idx()
+        
+        # Forçamos o uso da versão limpa agora que ela foi gerada
+        self._usar_limpo_flag = True
+        if hasattr(self, 'act_use_clean'):
+            self.act_use_clean.setChecked(True)
+
+        # Atualiza tudo para refletir a melhora no modelo
+        self._update_dashboard()
+        self._refresh_plot_panels()
+        
+        # Se quiser ver a nova equação e summary do modelo limpo:
+        self._apply_model_idx(self._current_idx(), log_source="(modelo saneado)")
+        
+        self._update_action_states()
+
+    def _on_chk_outliers_toggled(self, checked: bool):
+        """Reage à checkbox e sincroniza com o menu superior."""
+        # Sincroniza com a ação do menu (se ela existir) para evitar confusão
+        if hasattr(self, 'act_use_clean'):
+            if self.act_use_clean.isChecked() != checked:
+                self.act_use_clean.blockSignals(True)
+                self.act_use_clean.setChecked(checked)
+                self.act_use_clean.blockSignals(False)
+        
+        # Atualiza a flag de estado
+        self._usar_limpo_flag = checked
+        
+        # Log da mudança
+        status = "Modelo SANEADO (Sem Outliers)" if checked else "Modelo BRUTO"
+        self.log(f"Visualização alterada para: {status}")
+
+        # Atualiza Dashboard e Gráficos instantaneamente
+        self._update_dashboard()
+        self._refresh_plot_panels()
+
