@@ -32,10 +32,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QProgressBar, QPlainTextEdit, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QDialog, QPushButton,
-    QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter, QScrollArea
+    QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter,
+    QScrollArea, QToolBar, QStyle
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QAction, QKeySequence
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
@@ -292,6 +293,37 @@ class PredictionDialog(QDialog):
             "multiplicador_col": self.combo_multi.currentText()
         }
 
+class DropTableWidget(QTableWidget):
+    """Uma Tabela que aceita arrastar e soltar arquivos."""
+    fileDropped = pyqtSignal(str) # Sinal que avisa quando um arquivo caiu aqui
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True) # Habilita o recebimento de 'drops'
+
+    def dragEnterEvent(self, event):
+        # Verifica se o que está sendo arrastado é um arquivo (URL)
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        # Captura o caminho do primeiro arquivo solto
+        if event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            file_path = str(url.toLocalFile())
+            self.fileDropped.emit(file_path) # Dispara o sinal com o caminho do arquivo
+            event.accept()
+        else:
+            event.ignore()
+
 # ============================================================
 # MainWindow
 # ============================================================
@@ -323,6 +355,7 @@ class MainWindow(QMainWindow):
         self._ultima_amplitude = None
 
         self._build_menus()
+        self._build_toolbar()
 
         # Widget Central e Layout Raiz
         container = QWidget()
@@ -369,8 +402,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         
         # Aba 1: Dados Brutos
-        self.table_dados = QTableWidget()
+        self.table_dados = DropTableWidget()
         self.table_dados.setSortingEnabled(True)
+        
+        # Conecta o sinal do 'drop' à função de carregar dados
+        self.table_dados.fileDropped.connect(self.load_data_from_path)
+        
         self.tabs.addTab(self.table_dados, "Dados")
 
         # Aba 2: Resultados (ESTILIZADA COM FONTE MONOESPAÇADA)
@@ -666,6 +703,31 @@ class MainWindow(QMainWindow):
                 self.spin_modelo.setValue(0)
             finally:
                 self._updating_model_spin = False
+
+        is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
+        has_df = self.df is not None
+        has_any_fit = self.model is not None and len(getattr(self.model, "r2s", [])) > 0
+
+        if hasattr(self, 'btn_calc_tool'):
+            if is_running:
+                # MODO STOP: Execução ativa, habilitamos para cancelar
+                icon_stop = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop)
+                self.btn_calc_tool.setIcon(icon_stop)
+                self.btn_calc_tool.setText("Parar Execução")
+                self.btn_calc_tool.setToolTip("Cancelar execução ativa (Esc)")
+                self.btn_calc_tool.setEnabled(True) # Precisa estar habilitado para clicar no STOP
+            else:
+                # MODO PLAY: Nada rodando, pronto para calcular
+                icon_play = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+                self.btn_calc_tool.setIcon(icon_play)
+                self.btn_calc_tool.setText("Calcular (Fit MQO)")
+                self.btn_calc_tool.setToolTip("Executar Cálculo MQO (F5)")
+                # Habilitado apenas se houver dados carregados
+                self.btn_calc_tool.setEnabled(has_df)
+
+        if hasattr(self, 'btn_predict_tool'):
+            # Lupa desabilitada enquanto calcula ou se não houver modelo
+            self.btn_predict_tool.setEnabled(not is_running and has_any_fit)
 
     # ============================================================
     # Helpers gerais
@@ -1983,3 +2045,88 @@ class MainWindow(QMainWindow):
         # Divide a tela ao meio verticalmente (50% Abas | 50% Gráficos)
         largura = self.width()
         self.split_main.setSizes([largura // 2, largura // 2])
+
+    def load_data_from_path(self, path: str):
+        """Função centralizada para processar o arquivo vindo de qualquer fonte."""
+        if not path:
+            return
+
+        self.log_action("Carregar dados (Drag & Drop)")
+        
+        ok = False
+        try:
+            # Reutiliza sua lógica de leitura robusta
+            df, info = self._read_table_file(path)
+            self.df = df
+            self.csv_path = path
+
+            # Reseta os estados e limpa a interface (conforme seu código original)
+            self.preco = None
+            self.model = None
+            self._usar_limpo_flag = False
+            self._limpo_ready = False
+            self._limpo_ready_idx = None
+            
+            # Preenche a tabela
+            self._fill_table_from_df(self.table_dados, self.df)
+            
+            # Logs e UI
+            self.lbl_arquivo.setText(f"Arquivo: {os.path.basename(path)}")
+            self.log(f"Arquivo carregado via Drag & Drop: {path}")
+            self.log(f"Leitura: {info}")
+            
+            ok = True
+        except Exception as e:
+            self.log(f"Erro ao processar arquivo: {e}")
+            QMessageBox.critical(self, "Erro", f"Não foi possível ler o arquivo:\n{e}")
+
+        self._update_action_states()
+        if ok:
+            self.set_preco() # Abre o diálogo da variável dependente
+
+    def _build_toolbar(self):
+        """Constrói a barra de ferramentas com ícones de acesso rápido."""
+        toolbar = QToolBar("Barra de Ferramentas Principal")
+        toolbar.setIconSize(QSize(32, 32)) # Ícones grandes e visíveis
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+
+        # 1. CARREGAR DADOS (+)
+        # Usamos o ícone de 'Adicionar' ou 'Abrir' do sistema
+        icon_add = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
+        # Se você tiver um arquivo: icon_add = QIcon("caminho/para/mais.png")
+        act_toolbar_load = toolbar.addAction(icon_add, "Carregar Dados")
+        act_toolbar_load.triggered.connect(self.load_csv)
+        act_toolbar_load.setToolTip("Carregar Dados (Arquivo ou Arrastar)")
+
+        toolbar.addSeparator()
+
+        # 2. CALCULAR (RAIO)
+        # Usamos o ícone de 'Play' do sistema como padrão para 'Calcular'
+        icon_calc = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
+        # Se você tiver um arquivo: icon_calc = QIcon("caminho/para/raio.png")
+        self.btn_calc_tool = toolbar.addAction(icon_calc, "Calcular (Fit MQO)")
+        self.btn_calc_tool.triggered.connect(self._handle_calc_action)
+        self.btn_calc_tool.setToolTip("Executar Cálculo MQO (F5)")
+
+        # 3. PREDIZER VALOR (LUPA)
+        # Usamos o ícone de 'Busca/Lupa' do sistema
+        icon_search = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        # Se você tiver um arquivo: icon_search = QIcon("caminho/para/lupa.png")
+        self.btn_predict_tool = toolbar.addAction(icon_search, "Predizer Valor")
+        self.btn_predict_tool.triggered.connect(self.run_predicao)
+        self.btn_predict_tool.setToolTip("Predição de Valor de Mercado (Ctrl+P)")
+
+        # Adicionamos as referências à lista de ações para desabilitar durante o Fit
+        # (Isso garante que o usuário não clique em calcular enquanto já está calculando)
+        self._toolbar_actions = [self.btn_calc_tool, self.btn_predict_tool]
+
+    def _handle_calc_action(self):
+        """Decide se inicia o Fit ou se interrompe a execução atual."""
+        is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
+        
+        if is_running:
+            self.cancel_current()
+        else:
+            self.fit_model()
+
