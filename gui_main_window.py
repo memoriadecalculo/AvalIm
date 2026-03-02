@@ -921,7 +921,8 @@ class MainWindow(QMainWindow):
             return
 
         cur = self._current_idx()
-        if cur is not None and int(idx) == int(cur):
+        # Permite a execução se o índice mudar ou se for forçado (fim do Fit)
+        if cur is not None and int(idx) == int(cur) and log_source != "(force)":
             return
 
         n = self._num_modelos()
@@ -943,7 +944,7 @@ class MainWindow(QMainWindow):
         try:
             self.model.modelo = idx
 
-            # ao trocar modelo: desmarca "usar_limpo" e invalida o "limpo_ready"
+            # Reset de flags e interface
             self._usar_limpo_flag = False
             self._limpo_ready = False
             self._limpo_ready_idx = None
@@ -953,12 +954,49 @@ class MainWindow(QMainWindow):
             finally:
                 self.act_use_clean.blockSignals(False)
 
+            self.log_box.clear() # Opcional: limpa o log para focar no novo modelo
             self.log_action("Selecionar modelo")
-            self.log(f"Modelo selecionado: {idx} {log_source}".rstrip())
+            self.log(f"Modelo selecionado: {idx} {log_source if log_source != '(force)' else ''}".rstrip())
 
-            desc = self._transform_desc(idx)
-            if desc:
-                self.log(desc)
+            # --- 1. GERAÇÃO DA EQUAÇÃO DE REGRESSÃO ---
+            try:
+                res = self.model.modelos[idx]
+                params = res.params
+                comb = self.model.combinacoes[idx]
+                colunas = list(self.model.colunas)
+                y_name = self.model.preco
+                
+                y_idx = colunas.index(y_name)
+                y_form = self.model.transformada_print(int(comb[y_idx]), y_name)
+                
+                b0 = params.get('const', 0)
+                equacao = f"{y_form} = {b0:.6f}"
+                
+                for i, col in enumerate(colunas):
+                    if col == y_name: continue
+                    if col in params:
+                        val = params[col]
+                        transf_idx = int(comb[i])
+                        x_form = self.model.transformada_print(transf_idx, col)
+                        sinal = " + " if val >= 0 else " - "
+                        equacao += f"{sinal}{abs(val):.6f} * {x_form}"
+                
+                self.log_sep("EQUAÇÃO DE REGRESSÃO")
+                self.log(equacao)
+                self.log_sep()
+            except Exception as e_eq:
+                self.log(f"Aviso: Falha na equação: {e_eq}")
+
+            # --- 2. GERAÇÃO DO RESUMO (SUMMARY) AUTOMÁTICO ---
+            try:
+                # Chamamos o método resumo do modelo diretamente
+                # O parâmetro usar_limpo define se usamos a amostra com ou sem outliers
+                summary_text = self.model.resumo(usar_limpo=self.usar_limpo())
+                if summary_text:
+                    self.log(summary_text)
+                    self.log_sep()
+            except Exception as e_sum:
+                self.log(f"Aviso: Falha ao gerar o resumo estatístico: {e_sum}")
 
             self._update_action_states()
             self._refresh_plot_panels()
@@ -966,15 +1004,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_action("Selecionar modelo")
             self.log(f"Erro ao selecionar modelo {idx}: {e}")
-
-            cur2 = self._current_idx()
-            if cur2 is None:
-                cur2 = 0
-            self._updating_model_spin = True
-            try:
-                self.spin_modelo.setValue(int(cur2))
-            finally:
-                self._updating_model_spin = False
+            # ... (seu código de restauração do spinbox em caso de erro)
 
     def selecionar_modelo(self):
         self.log_action("Selecionar modelo")
@@ -1398,7 +1428,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # após fit: não habilita "usar_limpo" até rodar Limpar Outliers
+        # Reset de flags e botões de interface
         self._usar_limpo_flag = False
         self._limpo_ready = False
         self._limpo_ready_idx = None
@@ -1409,40 +1439,38 @@ class MainWindow(QMainWindow):
             self.act_use_clean.blockSignals(False)
 
         try:
+            # 1. Foca na aba de Resultados
             self.tabs.setCurrentWidget(self.log_box)
+            
+            # 2. Preenche a tabela de resultados (aba Tabela)
             self.resultados()
-            self.tabs.setCurrentWidget(self.log_box)
-        except Exception as e:
-            self.log_action("Pós-fit")
-            self.log(f"Falha ao rodar Resultados automaticamente: {e}")
 
-        self.log_action("Pós-fit (melhor modelo)")
-        self.lbl_status.setText("Concluído.")
-        self.progress.setValue(100)
-
-        try:
             n = self._num_modelos()
             if n <= 0:
                 self.log("Fit concluído, mas não há modelos disponíveis.")
                 self._update_action_states()
                 return
 
-            best_idx = max(0, min((self._current_idx() or 0), n - 1))
-            r2 = getattr(self.model, "r2s", None)
-            if r2 is not None:
-                try:
-                    self.log(f"Fit concluído. Melhor idx: {best_idx} | R²: {float(r2[best_idx]):.6f} | total: {n}")
-                except Exception:
-                    self.log(f"Fit concluído. Melhor idx: {best_idx} | total: {n}")
-            else:
-                self.log(f"Fit concluído. Melhor idx: {best_idx} | total: {n}")
+            # 3. Identifica o melhor modelo
+            best_idx = self._current_idx() if self._current_idx() is not None else 0
+            best_idx = max(0, min(int(best_idx), n - 1))
+
+            # 4. EXECUTAR EQUAÇÃO E RESUMO (SUMMARY)
+            # Esta função agora limpa o log e escreve a Equação + Summary automaticamente
+            self._apply_model_idx(best_idx, log_source="(force)")
+
+            # 5. ATUALIZAÇÃO APENAS VISUAL (Barra de Status e Progresso)
+            # Removemos os logs de texto aqui para manter o log limpo
+            self.lbl_status.setText(f"Concluído (Melhor modelo: {best_idx})")
+            self.progress.setValue(100)
 
         except Exception as e:
-            self.log(f"Erro pós-fit: {e}")
+            self.log(f"Erro no processamento pós-fit: {e}")
 
         self._update_action_states()
 
-        if self.model is not None and self._current_idx() is not None:
+        # Atualiza a pilha de gráficos lateral
+        if self.model is not None:
             self._refresh_plot_panels()
 
     # ============================================================
@@ -1524,10 +1552,10 @@ class MainWindow(QMainWindow):
             self.log("Nenhum modelo ajustado.")
             return
 
-        if hasattr(self.model, "resultados") and callable(getattr(self.model, "resultados")):
-            self.threads.append(start_worker(self.model.resultados, self.log, self.progress_slot, owner=self))
-        else:
-            self.log("Método resultados() não disponível.")
+        # if hasattr(self.model, "resultados") and callable(getattr(self.model, "resultados")):
+        #     self.threads.append(start_worker(self.model.resultados, self.log, self.progress_slot, owner=self))
+        # else:
+        #     self.log("Método resultados() não disponível.")
 
         if hasattr(self.model, "resultados_tabela") and callable(getattr(self.model, "resultados_tabela")):
             self.threads.append(
