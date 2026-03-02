@@ -325,34 +325,39 @@ class DropTableWidget(QTableWidget):
             event.ignore()
 
 class MetricCard(QFrame):
-    """Um card visual para exibir uma métrica (ex: R2 ou Teste SW)."""
+    """Card visual que agora funciona como um botão para ver detalhes."""
+    clicked = pyqtSignal() # Novo sinal de clique
+
     def __init__(self, label, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setCursor(Qt.CursorShape.PointingHandCursor) # Vira a "mãozinha"
         self.setStyleSheet("""
             MetricCard {
                 background-color: #f9f9f9;
                 border: 1px solid #dddddd;
                 border-radius: 6px;
-                min-width: 120px;
+                min-width: 125px;
             }
+            MetricCard:hover { background-color: #f0f0f0; border-color: #bbb; }
         """)
+        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(2)
-
         self.lbl_title = QLabel(label.upper())
-        self.lbl_title.setStyleSheet("color: #666666; font-size: 9px; font-weight: bold;")
+        self.lbl_title.setStyleSheet("color: #666; font-size: 9px; font-weight: bold;")
         self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.lbl_value = QLabel("-")
-        self.lbl_value.setStyleSheet("color: #000000; font-size: 14px; font-weight: bold;")
         self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.lbl_title)
         layout.addWidget(self.lbl_value)
 
-    def set_value(self, text, color="#fff"):
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def set_value(self, text, color="#000"):
         self.lbl_value.setText(text)
         self.lbl_value.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
 
@@ -438,18 +443,30 @@ class MainWindow(QMainWindow):
         self.card_r2_adj = MetricCard("R² Ajustado")
         self.card_fund = MetricCard("Fundamentação")
         self.card_norm = MetricCard("Normalidade (SW)")
+        self.card_norm_ks = MetricCard("Normalidade (KS)")
         self.card_homoc = MetricCard("Homocedasticidade (BP)")
         self.card_auto = MetricCard("Autocorrelação (DW)")
+        self.card_vif = MetricCard("Multicolinearidade")
         
         self.dash_layout.addWidget(self.card_r2)
         self.dash_layout.addWidget(self.card_r2_adj)
         self.dash_layout.addWidget(self.card_fund)
         self.dash_layout.addWidget(self.card_norm)
+        self.dash_layout.addWidget(self.card_norm_ks)
         self.dash_layout.addWidget(self.card_homoc)
         self.dash_layout.addWidget(self.card_auto)
+        self.dash_layout.addWidget(self.card_vif)
         self.dash_layout.addStretch()
 
         layout.addLayout(self.dash_layout)
+        
+        # Conecte os cliques após criar os cards no __init__
+        self.card_norm.clicked.connect(self.run_shapiro)
+        self.card_norm_ks.clicked.connect(self.run_kstest)
+        self.card_homoc.clicked.connect(self.run_bp)
+        self.card_auto.clicked.connect(self.run_dw)
+        self.card_vif.clicked.connect(self.run_vif)
+        self.card_fund.clicked.connect(self.run_enquadramento)
         
         # --- SPLITTER PRINCIPAL (DIVISÃO VERTICAL: ESQUERDA | DIREITA) ---
         self.split_main = QSplitter(Qt.Orientation.Horizontal)
@@ -2310,10 +2327,6 @@ class MainWindow(QMainWindow):
         self.btn_predict_tool.triggered.connect(self.run_predicao)
         self.btn_predict_tool.setToolTip("Predição de Valor de Mercado (Ctrl+P)")
 
-        # Adicionamos as referências à lista de ações para desabilitar durante o Fit
-        # (Isso garante que o usuário não clique em calcular enquanto já está calculando)
-        self._toolbar_actions = [self.btn_calc_tool, self.btn_predict_tool]
-        
         # 4. EXPORTAR PDF (ÍCONE DE DISQUETE/PDF)
         # Ícone padrão de 'Salvar' do sistema. 
         # DICA: Se tiver um ícone próprio, use: QIcon("caminho/pdf_icon.png")
@@ -2321,6 +2334,17 @@ class MainWindow(QMainWindow):
         self.btn_pdf_tool = toolbar.addAction(icon_pdf, "Exportar Laudo PDF")
         self.btn_pdf_tool.triggered.connect(self.exportar_laudo_pdf)
         self.btn_pdf_tool.setToolTip("Exportar Laudo Completo em PDF (Ctrl+Shift+E)")
+        
+        # Adicionamos as referências à lista de ações para desabilitar durante o Fit
+        # (Isso garante que o usuário não clique em calcular enquanto já está calculando)
+        self._toolbar_actions = [
+            self.btn_load_av_tool,
+            self.btn_dep_tool,
+            self.btn_calc_tool, 
+            self.btn_clean_tool,
+            self.btn_predict_tool,
+            self.btn_pdf_tool
+        ]
         
     def _handle_calc_action(self):
         """Decide se inicia o Fit ou se interrompe a execução atual."""
@@ -2339,54 +2363,55 @@ class MainWindow(QMainWindow):
             usar_limpo = self.usar_limpo()
             idx = self._current_idx()
             
-            # --- LÓGICA DE SELEÇÃO DO MODELO (CORRIGIDA) ---
+            # Seleção do modelo ativo
             if usar_limpo and self.model.modelo_limpo:
                 res = self.model.modelo_limpo
             else:
                 res = self.model.modelos[idx]
-            # ----------------------------------------------
 
-            if res is None:
-                return
+            if res is None: return
 
-            # 0. Coeficiente de Determinação (R²)
+            # Métricas de Ajuste
             r2 = res.rsquared
-            cor_r2 = "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336"
-            self.card_r2.set_value(f"{r2:.4f}", cor_r2)
+            self.card_r2.set_value(f"{r2:.4f}", "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336")
             
-            # 1. R² Ajustado
             r2_adj = res.rsquared_adj
-            cor_r2_adj = "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336"
-            self.card_r2_adj.set_value(f"{r2_adj:.4f}", cor_r2_adj)
+            self.card_r2_adj.set_value(f"{r2_adj:.4f}", "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336")
 
-            # 2. Testes Estatísticos (Check ou X)
+            # Testes Estatísticos (Retorno Booleano)
             try:
-                is_norm = self.model.check_normalidade(idx, usar_limpo)
-                self.card_norm.set_value("✔" if is_norm else "✘", "#4CAF50" if is_norm else "#F44336")
+                # 1. Normalidade (Shapiro-Wilk)
+                is_sw = self.model.check_normalidade(idx, usar_limpo)
+                self.card_norm.set_value("✔" if is_sw else "✘", "#4CAF50" if is_sw else "#F44336")
                 
+                # 2. Normalidade (Kolmogorov-Smirnov)
+                is_ks = self.model.check_normalidade_ks(idx, usar_limpo)
+                self.card_norm_ks.set_value("✔" if is_ks else "✘", "#4CAF50" if is_ks else "#F44336")
+                
+                # 3. Homocedasticidade (Breusch-Pagan)
                 is_homo = self.model.check_homocedasticidade(idx, usar_limpo)
                 self.card_homoc.set_value("✔" if is_homo else "✘", "#4CAF50" if is_homo else "#F44336")
                 
+                # 4. Autocorrelação (Durbin-Watson)
                 is_auto = self.model.check_autocorrelacao(idx, usar_limpo)
                 self.card_auto.set_value("✔" if is_auto else "✘", "#4CAF50" if is_auto else "#F44336")
-            except Exception as e_tests:
-                print(f"Erro nos testes: {e_tests}")
+                
+                # 5. Multicolinearidade (VIF)
+                is_vif = self.model.check_multicolinearidade(idx, usar_limpo)
+                self.card_vif.set_value("✔" if is_vif else "✘", "#4CAF50" if is_vif else "#F44336")
 
-            # 3. NBR 14653 (Fundamentação)
-            info_nbr = self.model.enquadramento_nbr(
-                usar_limpo=usar_limpo, 
-                amplitude_percentual=getattr(self, "_ultima_amplitude", None)
-            )
+            except Exception as e_tests:
+                print(f"Erro nos testes do Dashboard: {e_tests}")
+
+            # NBR 14653 (Fundamentação)
+            info_nbr = self.model.enquadramento_nbr(usar_limpo=usar_limpo, amplitude_percentual=getattr(self, "_ultima_amplitude", None))
             graus = ["Inidôneo", "I", "II", "III"]
-            
             g_fund = info_nbr['fundamentacao']
-            cor_fund = "#4CAF50" if g_fund >= 2 else "#FFC107" if g_fund == 1 else "#F44336"
-            self.card_fund.set_value(graus[g_fund], cor_fund)
+            self.card_fund.set_value(graus[g_fund], "#4CAF50" if g_fund >= 2 else "#FFC107" if g_fund == 1 else "#F44336")
 
         except Exception as e:
             print(f"Erro ao atualizar dashboard: {e}")
         
-        # Garante que a planilha de avaliandos seja recalculada com o novo cenário
         if hasattr(self, 'table_avaliandos') and self.table_avaliandos.rowCount() > 0:
             self._update_avaliandos_predictions()
         

@@ -1200,3 +1200,41 @@ class MQO:
         if mdl is None: return False
         dw = durbin_watson(mdl.resid)
         return 1.5 <= dw <= 2.5
+
+    def check_normalidade_ks(self, idx, usar_limpo=False):
+        """Verificação silenciosa de Kolmogorov-Smirnov para o Dashboard."""
+        from scipy.stats import kstest, zscore
+        mdl = self.modelo_limpo if usar_limpo else self.modelos[idx]
+        if mdl is None: return False
+        
+        # O teste KS exige resíduos padronizados para comparar com a normal padrão
+        residuos_pad = zscore(mdl.resid)
+        _, pvalue = kstest(residuos_pad, 'norm')
+        
+        # Retorna True se p-valor > 0.05 (segue a normal)
+        return pvalue > 0.05
+
+    def check_multicolinearidade(self, idx, usar_limpo=False):
+        """Verificação silenciosa de VIF para o Dashboard."""
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+        from statsmodels.tools.tools import add_constant
+        
+        amostra = self.amostra_limpa if usar_limpo else self.amostras[idx]
+        if amostra is None: return False
+        
+        try:
+            X = amostra.drop(columns=[self.preco])
+            X_const = add_constant(X, has_constant="add")
+            
+            # Percorre todos os regressores (ignorando a constante)
+            for i in range(X_const.shape[1]):
+                if X_const.columns[i] == 'const': continue
+                
+                vif = variance_inflation_factor(X_const.values, i)
+                # Critério de mercado: VIF > 10 indica multicolinearidade séria
+                # Se QUALQUER variável falhar, o Card marcará erro (X)
+                if vif >= 10: 
+                    return False
+            return True
+        except:
+            return False
