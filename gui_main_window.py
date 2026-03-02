@@ -33,10 +33,10 @@ from PyQt6.QtWidgets import (
     QLabel, QProgressBar, QPlainTextEdit, QTabWidget,
     QTableWidget, QTableWidgetItem, QMessageBox, QDialog, QPushButton,
     QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QSplitter,
-    QScrollArea, QToolBar, QStyle, QCheckBox
+    QScrollArea, QToolBar, QStyle, QCheckBox, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon, QColor
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
@@ -447,9 +447,8 @@ class MainWindow(QMainWindow):
         self.dash_layout.addWidget(self.card_norm)
         self.dash_layout.addWidget(self.card_homoc)
         self.dash_layout.addWidget(self.card_auto)
-        self.dash_layout.addStretch() # Empurra tudo para a esquerda
+        self.dash_layout.addStretch()
 
-        # Adiciona o layout do dashboard ao layout principal (acima do splitter)
         layout.addLayout(self.dash_layout)
         
         # --- SPLITTER PRINCIPAL (DIVISÃO VERTICAL: ESQUERDA | DIREITA) ---
@@ -500,7 +499,19 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget()
         self.table.setSortingEnabled(True)
         self.tabs.addTab(self.table, "Tabela (Resultados)")
-
+        
+        # Aba 4: Imóveis Avaliandos (Alvos da Avaliação)
+        self.table_avaliandos = QTableWidget()
+        self.tabs.addTab(self.table_avaliandos, "Avaliandos")
+        
+        # Botão na barra de ferramentas ou menu para carregar os avaliandos
+        self.act_load_avaliandos = self._make_action(
+            "Carregar Avaliandos...", 
+            slot=self.load_avaliandos_csv, 
+            tip="Carregar planilha com os imóveis a serem avaliados"
+        )
+        # Adicione ao menu Arquivo ou Modelo
+        
         self.scroll_left.setWidget(self.tabs)
         self.split_main.addWidget(self.scroll_left)
 
@@ -577,16 +588,47 @@ class MainWindow(QMainWindow):
     def _build_menus(self):
         mb = self.menuBar()
 
+        # --- MENU ARQUIVO ---
         m_file = mb.addMenu("&Arquivo")
-        # Mantive o nome do método (load_csv) por compatibilidade, mas agora carrega vários formatos.
-        self.act_load_csv = self._make_action("Carregar &Dados...", slot=self.load_csv, shortcut=QKeySequence.StandardKey.Open)
-        self.act_export = self._make_action("Exportar Laudo PDF...", slot=self.exportar_laudo_pdf, shortcut=QKeySequence("Ctrl+Shift+E"))
-        self.act_exit = self._make_action("Sa&ir", slot=self.close, shortcut=QKeySequence.StandardKey.Quit)
+        
+        # 1. Carregar Dados (Mercado)
+        self.act_load_csv = self._make_action(
+            "Carregar &Dados...", 
+            slot=self.load_csv, 
+            shortcut=QKeySequence.StandardKey.Open
+        )
+        
+        # 2. Carregar Avaliandos (Alvos)
+        self.act_load_avaliandos = self._make_action(
+            "Carregar &Avaliandos...", 
+            slot=self.load_avaliandos_csv, 
+            shortcut=QKeySequence("Ctrl+Shift+A"),
+            tip="Carregar planilha com os imóveis a serem avaliados"
+        )
+        
+        # 3. Exportar
+        self.act_export = self._make_action(
+            "Exportar Laudo PDF...", 
+            slot=self.exportar_laudo_pdf, 
+            shortcut=QKeySequence("Ctrl+Shift+E")
+        )
+        
+        # 4. Sair
+        self.act_exit = self._make_action(
+            "Sa&ir", 
+            slot=self.close, 
+            shortcut=QKeySequence.StandardKey.Quit
+        )
+
+        # Adicionando as ações ao menu na ordem lógica
         m_file.addAction(self.act_load_csv)
+        m_file.addAction(self.act_load_avaliandos)
+        m_file.addSeparator()
         m_file.addAction(self.act_export)
         m_file.addSeparator()
         m_file.addAction(self.act_exit)
 
+        # --- MENU MODELO ---
         m_model = mb.addMenu("&Modelo")
         self.act_set_preco = self._make_action("&Definir variável dependente...", slot=self.set_preco, shortcut=QKeySequence("Ctrl+D"))
         self.act_fit = self._make_action("&Calcular (Fit MQO)", slot=self.fit_model, shortcut=QKeySequence("F5"))
@@ -594,6 +636,7 @@ class MainWindow(QMainWindow):
         self.act_resultados = self._make_action("&Resultados", slot=self.resultados, shortcut=QKeySequence("Ctrl+T"))
         self.act_select_model = self._make_action("&Selecionar modelo (idx)...", slot=self.selecionar_modelo, shortcut=QKeySequence("Ctrl+Enter"))
         self.act_clean_outliers = self._make_action("Limpar &Outliers...", slot=self.menu_limpar_outliers, shortcut=QKeySequence("Ctrl+L"))
+        
         self.act_use_clean = self._make_action(
             "Usar o modelo sem outliers?",
             slot=self.toggle_usar_limpo,
@@ -601,6 +644,7 @@ class MainWindow(QMainWindow):
             checkable=True
         )
         self.act_use_clean.setChecked(False)
+        
         self.act_predict = self._make_action("Predizer Valor...", slot=self.run_predicao, shortcut=QKeySequence("Ctrl+P"))
         self.act_enquadrar = self._make_action("Enquadramento NBR...", slot=self.run_enquadramento)
         self.act_cooks = self._make_action("Distância de &Cook", slot=self.run_cooks, shortcut=QKeySequence("Ctrl+Shift+C"))
@@ -617,40 +661,26 @@ class MainWindow(QMainWindow):
         m_model.addAction(self.act_use_clean)
         m_model.addAction(self.act_predict)
         m_model.addAction(self.act_enquadrar)
-        
+
+        # --- MENU RELATÓRIOS ---
         m_rep = mb.addMenu("&Relatórios")
         self.act_summary = self._make_action("&Resumo (summary)", slot=self.run_summary, shortcut=QKeySequence("Ctrl+M"))
         self.act_elast = self._make_action("&Elasticidades", slot=self.run_elasticidades, shortcut=QKeySequence("Ctrl+E"))
         self.act_dist_res = self._make_action("Dist. &Resíduos", slot=self.run_distribuicao_residuos, shortcut=QKeySequence("Ctrl+Shift+R"))
+        
         m_rep.addAction(self.act_summary)
         m_rep.addAction(self.act_elast)
         m_rep.addSeparator()
         m_rep.addAction(self.act_dist_res)
 
-        # m_plot = mb.addMenu("&Gráficos")
-        # self.act_graficos = self._make_action("&Gráficos", slot=self.run_graficos, shortcut=QKeySequence("Ctrl+G"))
-        # self.act_boxplot = self._make_action("&Boxplot", slot=self.run_boxplot, shortcut=QKeySequence("Ctrl+B"))
-        # self.act_corr = self._make_action("Matriz de &Correlação", slot=self.run_matrix_corr, shortcut=QKeySequence("Ctrl+K"))
-        # self.act_aderencia = self._make_action("&Aderência", slot=self.run_aderencia, shortcut=QKeySequence("Ctrl+A"))
-        # self.act_residuos = self._make_action("Resíduos &Padronizados", slot=self.run_residuos, shortcut=QKeySequence("Ctrl+P"))
-        # self.act_hist = self._make_action("&Histograma", slot=self.run_histograma, shortcut=QKeySequence("Ctrl+H"))
-
-        # m_plot.addAction(self.act_boxplot)
-        # m_plot.addAction(self.act_graficos)
-        # m_plot.addAction(self.act_residuos)
-        # m_plot.addSeparator()
-        # m_plot.addAction(self.act_corr)
-        # m_plot.addAction(self.act_aderencia)
-        # m_plot.addSeparator()
-        # m_plot.addAction(self.act_hist)
-        # m_plot.addAction(self.act_cooks)
-
+        # --- MENU TESTES ---
         m_tests = mb.addMenu("&Testes")
         self.act_shapiro = self._make_action("Normalidade &SW (Shapiro)", slot=self.run_shapiro, shortcut=QKeySequence("Ctrl+1"))
         self.act_kstest = self._make_action("Normalidade &KS", slot=self.run_kstest, shortcut=QKeySequence("Ctrl+2"))
         self.act_bp = self._make_action("&Heterocedasticidade (BP)", slot=self.run_bp, shortcut=QKeySequence("Ctrl+3"))
         self.act_dw = self._make_action("&Autocorrelação (DW)", slot=self.run_dw, shortcut=QKeySequence("Ctrl+4"))
         self.act_vif = self._make_action("&Multicolinearidade (VIF)", slot=self.run_vif, shortcut=QKeySequence("Ctrl+5"))
+        
         m_tests.addAction(self.act_shapiro)
         m_tests.addAction(self.act_kstest)
         m_tests.addSeparator()
@@ -659,6 +689,7 @@ class MainWindow(QMainWindow):
         m_tests.addSeparator()
         m_tests.addAction(self.act_vif)
 
+        # --- MENU AJUDA ---
         m_help = mb.addMenu("A&juda")
 
         def _about():
@@ -666,10 +697,9 @@ class MainWindow(QMainWindow):
                 self,
                 "AvalIm (MQO)",
                 "AvalIm — MQO\n\n"
-                "Split principal: Resultados/Tabela (40%) | Figuras (60%).\n"
-                "Figuras: 2 linhas iguais; cada linha tem 3 colunas iguais (1,1,1).\n"
-                "Duplo-clique em um painel abre a janela do gráfico (PlotWindow).\n\n"
-                "Entrada aceita: CSV/TXT/TSV/TAB (delimitadores ';', ',', TAB) + Excel/ODS."
+                "Software para avaliação de imóveis por regressão linear.\n"
+                "Suporte a saneamento de amostra e enquadramento NBR 14653.\n\n"
+                "Desenvolvido para Perícias Judiciais e Avaliações Urbanas."
             )
 
         self.act_about = self._make_action("&Sobre", slot=_about, shortcut=QKeySequence("F1"))
@@ -951,37 +981,37 @@ class MainWindow(QMainWindow):
             return
 
         usar_limpo = self.usar_limpo()
-        figs = {}
-        errs = {}
+        self.lbl_status.setText("Renderizando gráficos... (isso pode levar alguns segundos)")
+        
+        # Lista de tarefas para iterar e permitir o processamento de eventos
+        plot_tasks = [
+            ("box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False)),
+            ("graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False)),
+            ("residuos", lambda: self.model.residuos_grafico(usar_limpo=usar_limpo, show=False)),
+            ("cooks", lambda: self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False)),
+            ("corr", lambda: self.model.matrix_corr(usar_limpo=usar_limpo, show=False)),
+            ("aderencia", lambda: self.model.aderencia(usar_limpo=usar_limpo, show=False)),
+            ("hist", lambda: self.model.histograma(usar_limpo=usar_limpo, show=False))
+        ]
 
-        def safe(name: str, call):
+        panels = {
+            "box": self.panel_box, "graficos": self.panel_graficos, 
+            "residuos": self.panel_residuos, "cooks": self.panel_cooks,
+            "corr": self.panel_corr, "aderencia": self.panel_aderencia, "hist": self.panel_hist
+        }
+
+        for name, call in plot_tasks:
+            # Verifica se um novo job de plotagem começou (evita renderizar o que já mudou)
+            if job_id != self._plots_job_id: return 
+            
             try:
-                figs[name] = call()
+                fig = call()
+                panels[name].set_figure(fig)
             except Exception as e:
-                figs[name] = None
-                errs[name] = str(e)
-
-        # Geração de todos os gráficos, incluindo o novo de Cook
-        safe("box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False))
-        safe("graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False))
-        safe("residuos", lambda: self.model.residuos_grafico(usar_limpo=usar_limpo, show=False))
-        safe("cooks", lambda: self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False))
-        safe("corr", lambda: self.model.matrix_corr(usar_limpo=usar_limpo, show=False))
-        safe("aderencia", lambda: self.model.aderencia(usar_limpo=usar_limpo, show=False))
-        safe("hist", lambda: self.model.histograma(usar_limpo=usar_limpo, show=False))
-
-        # Atribuição aos painéis
-        self.panel_box.set_figure(figs.get("box"))
-        self.panel_graficos.set_figure(figs.get("graficos"))
-        self.panel_residuos.set_figure(figs.get("residuos"))
-        self.panel_cooks.set_figure(figs.get("cooks"))
-        self.panel_corr.set_figure(figs.get("corr"))
-        self.panel_aderencia.set_figure(figs.get("aderencia"))
-        self.panel_hist.set_figure(figs.get("hist"))
-
-        if errs:
-            for k, msg in errs.items():
-                self.log(f"⚠️ Erro no gráfico '{k}': {msg}")
+                self.log(f"⚠️ Erro no gráfico '{name}': {e}")
+            
+            # --- O SEGREDO: Dá um fôlego para a Interface ---
+            QApplication.processEvents() 
 
         self.lbl_status.setText("Pilha de gráficos atualizada.")
 
@@ -1526,22 +1556,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Reset de flags e botões de interface
         self._usar_limpo_flag = False
         self._limpo_ready = False
         self._limpo_ready_idx = None
-        try:
-            self.act_use_clean.blockSignals(True)
-            self.act_use_clean.setChecked(False)
-        finally:
-            self.act_use_clean.blockSignals(False)
 
         try:
-            # 1. Foca na aba de Resultados
             self.tabs.setCurrentWidget(self.log_box)
-            
-            # 2. Preenche a tabela de resultados (aba Tabela)
-            self.resultados()
+            self.resultados() # Preenche a tabela em thread separada
 
             n = self._num_modelos()
             if n <= 0:
@@ -1549,16 +1570,12 @@ class MainWindow(QMainWindow):
                 self._update_action_states()
                 return
 
-            # 3. Identifica o melhor modelo
             best_idx = self._current_idx() if self._current_idx() is not None else 0
             best_idx = max(0, min(int(best_idx), n - 1))
 
-            # 4. EXECUTAR EQUAÇÃO E RESUMO (SUMMARY)
-            # Esta função agora limpa o log e escreve a Equação + Summary automaticamente
+            # Este método já chama o Dashboard e os Gráficos internamente
             self._apply_model_idx(best_idx, log_source="(force)")
 
-            # 5. ATUALIZAÇÃO APENAS VISUAL (Barra de Status e Progresso)
-            # Removemos os logs de texto aqui para manter o log limpo
             self.lbl_status.setText(f"Concluído (Melhor modelo: {best_idx})")
             self.progress.setValue(100)
 
@@ -1566,10 +1583,7 @@ class MainWindow(QMainWindow):
             self.log(f"Erro no processamento pós-fit: {e}")
 
         self._update_action_states()
-
-        # Atualiza a pilha de gráficos lateral
-        if self.model is not None:
-            self._refresh_plot_panels()
+        # REMOVIDA a chamada redundante de refresh_plot_panels que estava aqui
 
     # ============================================================
     # FIT — agora BLOQUEANTE
@@ -2298,7 +2312,16 @@ class MainWindow(QMainWindow):
         self.btn_pdf_tool = toolbar.addAction(icon_pdf, "Exportar Laudo PDF")
         self.btn_pdf_tool.triggered.connect(self.exportar_laudo_pdf)
         self.btn_pdf_tool.setToolTip("Exportar Laudo Completo em PDF (Ctrl+Shift+E)")
+        
+        toolbar = self.findChild(QToolBar) # Localiza a toolbar existente
+        toolbar.addSeparator()
 
+        # Botão para Carregar Avaliandos
+        icon_av = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView)
+        self.btn_load_av_tool = toolbar.addAction(icon_av, "Carregar Avaliandos")
+        self.btn_load_av_tool.triggered.connect(self.load_avaliandos_csv)
+        self.btn_load_av_tool.setToolTip("Carregar Planilha de Avaliandos (Ctrl+Shift+A)")
+    
     def _handle_calc_action(self):
         """Decide se inicia o Fit ou se interrompe a execução atual."""
         is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
@@ -2316,33 +2339,28 @@ class MainWindow(QMainWindow):
             usar_limpo = self.usar_limpo()
             idx = self._current_idx()
             
-            # --- LÓGICA DE SELEÇÃO DO MODELO ---
-            # Se a flag "Sem outliers" estiver ativa e o modelo limpo existir, usamos ele.
-            # Caso contrário, usamos o modelo bruto do índice atual.
+            # --- LÓGICA DE SELEÇÃO DO MODELO (CORRIGIDA) ---
             if usar_limpo and self.model.modelo_limpo:
                 res = self.model.modelo_limpo
             else:
                 res = self.model.modelos[idx]
-            
-            # A LINHA REDUNDANTE FOI REMOVIDA DAQUI
             # ----------------------------------------------
 
             if res is None:
                 return
 
-            # 0. Coeficiente de Determinação ($R^2$)
+            # 0. Coeficiente de Determinação (R²)
             r2 = res.rsquared
             cor_r2 = "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336"
             self.card_r2.set_value(f"{r2:.4f}", cor_r2)
             
-            # 1. $R^2$ Ajustado ($R^2_{adj}$)
+            # 1. R² Ajustado
             r2_adj = res.rsquared_adj
             cor_r2_adj = "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336"
             self.card_r2_adj.set_value(f"{r2_adj:.4f}", cor_r2_adj)
 
             # 2. Testes Estatísticos (Check ou X)
             try:
-                # O model.py gerencia se usa o resíduo limpo ou bruto com base na flag
                 is_norm = self.model.check_normalidade(idx, usar_limpo)
                 self.card_norm.set_value("✔" if is_norm else "✘", "#4CAF50" if is_norm else "#F44336")
                 
@@ -2354,29 +2372,24 @@ class MainWindow(QMainWindow):
             except Exception as e_tests:
                 print(f"Erro nos testes: {e_tests}")
 
-            # 3. NBR 14653 (Fundamentação e Precisão)
+            # 3. NBR 14653 (Fundamentação)
             info_nbr = self.model.enquadramento_nbr(
                 usar_limpo=usar_limpo, 
                 amplitude_percentual=getattr(self, "_ultima_amplitude", None)
             )
             graus = ["Inidôneo", "I", "II", "III"]
             
-            # Fundamentação
             g_fund = info_nbr['fundamentacao']
             cor_fund = "#4CAF50" if g_fund >= 2 else "#FFC107" if g_fund == 1 else "#F44336"
             self.card_fund.set_value(graus[g_fund], cor_fund)
-            
-            # Precisão
-            # if 'precisao' in info_nbr:
-            #     g_prec = info_nbr['precisao']
-            #     cor_prec = "#4CAF50" if g_prec >= 2 else "#FFC107" if g_prec == 1 else "#F44336"
-            #     self.card_prec.set_value(graus[g_prec], cor_prec)
-            # else:
-            #     self.card_prec.set_value("Pendente", "#888")
 
         except Exception as e:
             print(f"Erro ao atualizar dashboard: {e}")
-
+        
+        # Garante que a planilha de avaliandos seja recalculada com o novo cenário
+        if hasattr(self, 'table_avaliandos') and self.table_avaliandos.rowCount() > 0:
+            self._update_avaliandos_predictions()
+        
     def run_outliers_exc(self):
         """Inicia o processo de exclusão iterativa de outliers via Thread."""
         if not self.model:
@@ -2494,4 +2507,119 @@ class MainWindow(QMainWindow):
         eq_estimativa = inversas.get(t_y, f"{y_name} = f^-1[{rhs}]")
 
         return eq_regressao, eq_estimativa
+
+    def load_avaliandos_csv(self):
+        """Abre o diálogo para carregar a planilha de imóveis avaliandos."""
+        filtros = "Dados (*.csv *.txt *.tsv *.xls *.xlsx *.ods);;Todos (*.*)"
+        path, _ = QFileDialog.getOpenFileName(self, "Carregar Avaliandos", "", filtros)
+        
+        if not path:
+            return
+
+        self.log_action("Carregar Avaliandos")
+        try:
+            # Reutiliza a lógica de leitura robusta do sistema
+            df_av, info = self._read_table_file(path)
+            self.df_avaliandos = df_av
+            
+            # Define as colunas de entrada e as colunas de saída (predição)
+            cols_originais = list(df_av.columns)
+            novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
+            
+            self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
+            self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
+            
+            # Preenche os dados originais
+            self.table_avaliandos.setRowCount(len(df_av))
+            for r in range(len(df_av)):
+                for c in range(len(cols_originais)):
+                    val = df_av.iat[r, c]
+                    text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
+                    self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
+            
+            self.log(f"Planilha de avaliandos carregada: {len(df_av)} imóveis.")
+            self.tabs.setCurrentWidget(self.table_avaliandos)
+            
+            # Executa a predição automática se o modelo já existir
+            if self.model:
+                self._update_avaliandos_predictions()
+                
+        except Exception as e:
+            self.log(f"Erro ao carregar avaliandos: {e}")
+            QMessageBox.critical(self, "Erro", f"Falha ao carregar avaliandos:\n{e}")
+
+    def _update_avaliandos_predictions(self):
+        """Calcula as predições e o Grau de Precisão para todos os imóveis avaliandos."""
+        if not self.model or not hasattr(self, 'df_avaliandos'):
+            return
+
+        usar_limpo = self.usar_limpo()
+        
+        # Define o multiplicador (Tenta 'Área', senão usa a primeira coluna da planilha)
+        col_multi = "Área" if "Área" in self.df_avaliandos.columns else self.df_avaliandos.columns[0]
+
+        self.table_avaliandos.blockSignals(True) 
+
+        for r in range(self.table_avaliandos.rowCount()):
+            try:
+                # --- IGUAL À FUNÇÃO PREDIZER VALOR DO MENU ---
+                # 1. Coleta TODOS os valores da linha de forma genérica
+                valores_dict = {}
+                for c in range(len(self.df_avaliandos.columns)):
+                    col_name = self.df_avaliandos.columns[c]
+                    item = self.table_avaliandos.item(r, c)
+                    if item:
+                        # Limpeza de strings (Tratamento robusto de pontos e vírgulas)
+                        text = item.text().strip().replace('R$', '').replace(' ', '')
+                        
+                        if ',' in text and '.' in text: # Padrão Brasileiro 1.234,56
+                            text = text.replace('.', '').replace(',', '.')
+                        elif ',' in text: # Padrão 1234,56
+                            text = text.replace(',', '.')
+                        
+                        try:
+                            valores_dict[col_name] = float(text)
+                        except ValueError:
+                            valores_dict[col_name] = 0.0
+                    else:
+                        valores_dict[col_name] = 0.0
+
+                # 2. Chama o modelo passando o dicionário inteiro (Sem filtrar colunas)
+                # O model.py faz a inversão de ln/log automaticamente
+                res_pred = self.model.predicao_completa(valores_dict, usar_limpo=usar_limpo)
+                
+                v_unitario = res_pred['valor_pontual']
+                
+                # 3. Cálculo da Amplitude (Exatamente a mesma fórmula do menu superior)
+                amplitude = (res_pred['ic_superior'] - res_pred['ic_inferior']) / v_unitario
+                
+                # 4. Enquadramento de Precisão NBR 14653
+                info_p = self.model.enquadramento_nbr(usar_limpo=usar_limpo, amplitude_percentual=amplitude)
+                graus = ["Inidôneo", "I", "II", "III"]
+                grau_idx = info_p.get('precisao', 0)
+
+                # 5. Preenchimento das colunas de resultado na tabela
+                base_c = len(self.df_avaliandos.columns)
+                fator = valores_dict.get(col_multi, 1.0)
+                
+                # Valor Unitário (R$/m²)
+                self.table_avaliandos.setItem(r, base_c, QTableWidgetItem(f"{v_unitario:,.2f}"))
+                # Valor Total (Unitário x Área)
+                self.table_avaliandos.setItem(r, base_c + 1, QTableWidgetItem(f"{v_unitario * fator:,.2f}"))
+                # Amplitude (%)
+                self.table_avaliandos.setItem(r, base_c + 2, QTableWidgetItem(f"{amplitude*100:.2f}%"))
+                
+                # Grau de Precisão (Com cor dinâmica)
+                item_grau = QTableWidgetItem(graus[grau_idx])
+                cor_hex = "#4CAF50" if grau_idx >= 2 else "#FFC107" if grau_idx == 1 else "#F44336"
+                item_grau.setForeground(QColor(cor_hex))
+                item_grau.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table_avaliandos.setItem(r, base_c + 3, item_grau)
+
+            except Exception as e:
+                print(f"Erro no cálculo automático da linha {r}: {e}")
+                continue
+
+        self.table_avaliandos.blockSignals(False)
+        self.table_avaliandos.resizeColumnsToContents()
 
