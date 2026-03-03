@@ -663,8 +663,6 @@ class MainWindow(QMainWindow):
         )
         self.act_use_clean.setChecked(False)
         
-        self.act_predict = self._make_action("Predizer Valor...", slot=self.run_predicao, shortcut=QKeySequence("Ctrl+P"))
-        self.act_enquadrar = self._make_action("Enquadramento NBR...", slot=self.run_enquadramento)
         self.act_cooks = self._make_action("Distância de &Cook", slot=self.run_cooks, shortcut=QKeySequence("Ctrl+Shift+C"))
         
         m_model.addAction(self.act_set_preco)
@@ -677,9 +675,7 @@ class MainWindow(QMainWindow):
         m_model.addSeparator()
         m_model.addAction(self.act_clean_outliers)
         m_model.addAction(self.act_use_clean)
-        m_model.addAction(self.act_predict)
-        m_model.addAction(self.act_enquadrar)
-
+        
         # --- MENU RELATÓRIOS ---
         m_rep = mb.addMenu("&Relatórios")
         self.act_summary = self._make_action("&Resumo (summary)", slot=self.run_summary, shortcut=QKeySequence("Ctrl+M"))
@@ -862,10 +858,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btn_clean_tool'):
             # Só habilita se não estiver calculando e se houver um modelo para limpar
             self.btn_clean_tool.setEnabled(not is_running and has_any_fit)
-        
-        if hasattr(self, 'btn_predict_tool'):
-            # Lupa desabilitada enquanto calcula ou se não houver modelo
-            self.btn_predict_tool.setEnabled(not is_running and has_any_fit)
         
         # Controle do botão de PDF na Toolbar
         if hasattr(self, 'btn_pdf_tool'):
@@ -2319,14 +2311,6 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        # PREDIZER VALOR (LUPA)
-        # Usamos o ícone de 'Busca/Lupa' do sistema
-        icon_search = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-        # Se você tiver um arquivo: icon_search = QIcon("caminho/para/lupa.png")
-        self.btn_predict_tool = toolbar.addAction(icon_search, "Predizer Valor")
-        self.btn_predict_tool.triggered.connect(self.run_predicao)
-        self.btn_predict_tool.setToolTip("Predição de Valor de Mercado (Ctrl+P)")
-
         # 4. EXPORTAR PDF (ÍCONE DE DISQUETE/PDF)
         # Ícone padrão de 'Salvar' do sistema. 
         # DICA: Se tiver um ícone próprio, use: QIcon("caminho/pdf_icon.png")
@@ -2342,7 +2326,6 @@ class MainWindow(QMainWindow):
             self.btn_dep_tool,
             self.btn_calc_tool, 
             self.btn_clean_tool,
-            self.btn_predict_tool,
             self.btn_pdf_tool
         ]
         
@@ -2543,12 +2526,27 @@ class MainWindow(QMainWindow):
             self._process_avaliandos_logic(path)
 
     def _process_avaliandos_logic(self, path: str):
-        """Lógica centralizada que realmente lê o arquivo e preenche a tabela."""
+        """Lógica centralizada que lê o arquivo e valida se as colunas batem com o modelo."""
         try:
-            # Reutiliza a sua leitura robusta (já lida com Excel, CSV, separadores, etc.)
             df_av, info = self._read_table_file(path)
-            self.df_avaliandos = df_av
             
+            # --- VALIDAÇÃO DE SEGURANÇA ---
+            if self.df is not None:
+                # Pegamos as colunas que o modelo realmente usa (X)
+                colunas_necessarias = [c for c in self.df.columns if c != self.preco]
+                colunas_planilha = list(df_av.columns)
+                
+                faltando = [c for c in colunas_necessarias if c not in colunas_planilha]
+                
+                if faltando:
+                    msg = (f"A planilha de avaliandos está incompleta!\n\n"
+                           f"Faltam as seguintes colunas: {', '.join(faltando)}\n\n"
+                           "Dica: Os nomes devem ser idênticos aos da base de dados (case-sensitive).")
+                    QMessageBox.warning(self, "Erro de Compatibilidade", msg)
+                    return # Interrompe o carregamento se não for compatível
+            # ------------------------------
+
+            self.df_avaliandos = df_av
             cols_originais = list(df_av.columns)
             novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
             
@@ -2562,11 +2560,9 @@ class MainWindow(QMainWindow):
                     text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
                     self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
             
-            self.log(f"Avaliandos carregados: {len(df_av)} imóveis.")
-            self.log(f"Fonte: {info}")
+            self.log(f"Avaliandos carregados: {len(df_av)} imóveis (Colunas validadas).")
             self.tabs.setCurrentWidget(self.table_avaliandos)
             
-            # Se já tiver um modelo rodando, ele já calcula tudo na hora!
             if self.model:
                 self._update_avaliandos_predictions()
                 
