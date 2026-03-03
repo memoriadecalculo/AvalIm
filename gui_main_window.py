@@ -399,7 +399,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(container)
         self.setCentralWidget(container)
 
-        # --- LINHA 1: Controles Superiores (Arquivo e Seletor de Modelo) ---
+        # --- LINHA 1: Controles Superiores ---
         linha1 = QHBoxLayout()
         self.lbl_arquivo = QLabel("Arquivo: (nenhum)")
         self.lbl_arquivo.setToolTip("Arquivo de dados carregado.")
@@ -416,13 +416,11 @@ class MainWindow(QMainWindow):
         self.spin_modelo.valueChanged.connect(self._on_model_spin_value_changed)
         linha1.addWidget(self.spin_modelo)
         
-        # --- ADICIONADO AQUI: Checkbox ao lado do Spinbox ---
         self.chk_sem_outliers = QCheckBox("Sem outliers")
         self.chk_sem_outliers.setEnabled(False)
         self.chk_sem_outliers.setToolTip("Alternar visualização entre modelo bruto e saneado")
         self.chk_sem_outliers.toggled.connect(self._on_chk_outliers_toggled)
         linha1.addWidget(self.chk_sem_outliers)
-        # ----------------------------------------------------
         
         layout.addLayout(linha1)
 
@@ -460,43 +458,36 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(self.dash_layout)
         
-        # Conecte os cliques após criar os cards no __init__
-        self.card_norm.clicked.connect(self.run_shapiro)
-        self.card_norm_ks.clicked.connect(self.run_kstest)
-        self.card_homoc.clicked.connect(self.run_bp)
-        self.card_auto.clicked.connect(self.run_dw)
-        self.card_vif.clicked.connect(self.run_vif)
-        self.card_fund.clicked.connect(self.run_enquadramento)
+        # ALTERADO: Conexão dos cliques para focar na aba Resultados
+        self.card_r2.clicked.connect(self.focus_results_tab)
+        self.card_r2_adj.clicked.connect(self.focus_results_tab)
+        self.card_fund.clicked.connect(self.focus_results_tab)
+        self.card_norm.clicked.connect(self.focus_results_tab)
+        self.card_norm_ks.clicked.connect(self.focus_results_tab)
+        self.card_homoc.clicked.connect(self.focus_results_tab)
+        self.card_auto.clicked.connect(self.focus_results_tab)
+        self.card_vif.clicked.connect(self.focus_results_tab)
         
-        # --- SPLITTER PRINCIPAL (DIVISÃO VERTICAL: ESQUERDA | DIREITA) ---
+        # --- SPLITTER PRINCIPAL ---
         self.split_main = QSplitter(Qt.Orientation.Horizontal)
         self.split_main.setHandleWidth(10)
 
-        # ---------------------------------------------------------
-        # 1. LADO ESQUERDO: Abas (Dados, Resultados, Tabela)
-        # ---------------------------------------------------------
         self.scroll_left = QScrollArea()
         self.scroll_left.setWidgetResizable(True)
         self.scroll_left.setFrameShape(QFrame.Shape.NoFrame)
         
         self.tabs = QTabWidget()
         
-        # Aba 1: Dados Brutos
         self.table_dados = DropTableWidget()
         self.table_dados.setSortingEnabled(True)
-        
-        # Conecta o sinal do 'drop' à função de carregar dados
         self.table_dados.fileDropped.connect(self.load_data_from_path)
-        
         self.tabs.addTab(self.table_dados, "Dados")
 
-        # Aba 2: Resultados (ESTILIZADA COM FONTE MONOESPAÇADA)
+        # Aba 2: Resultados (ESTILIZADA COM FONTE MONOESPAÇADA - PRESERVADO)
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
-        # IMPORTANTE: Desativa quebra de linha para não bagunçar as tabelas
         self.log_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
-        # Configuração rigorosa da fonte para alinhamento de colunas
         mono = QFont("DejaVu Sans Mono", 10)
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self.log_box.setFont(mono)
@@ -512,30 +503,17 @@ class MainWindow(QMainWindow):
         """)
         self.tabs.addTab(self.log_box, "Resultados")
 
-        # Aba 3: Tabela de Resultados
         self.table = QTableWidget()
         self.table.setSortingEnabled(True)
         self.tabs.addTab(self.table, "Tabela (Resultados)")
         
-        # Aba 4: Imóveis Avaliandos (Alvos da Avaliação)
         self.table_avaliandos = DropTableWidget()
         self.tabs.addTab(self.table_avaliandos, "Avaliandos")
         self.table_avaliandos.fileDropped.connect(self.load_avaliandos_from_path)
         
-        # Botão na barra de ferramentas ou menu para carregar os avaliandos
-        self.act_load_avaliandos = self._make_action(
-            "Carregar Avaliandos...", 
-            slot=self.load_avaliandos_csv, 
-            tip="Carregar planilha com os imóveis a serem avaliados"
-        )
-        # Adicione ao menu Arquivo ou Modelo
-        
         self.scroll_left.setWidget(self.tabs)
         self.split_main.addWidget(self.scroll_left)
 
-        # ---------------------------------------------------------
-        # 2. LADO DIREITO: Pilha de Gráficos com Scroll
-        # ---------------------------------------------------------
         self.scroll_right = QScrollArea()
         self.scroll_right.setWidgetResizable(True)
         self.scroll_right.setFrameShape(QFrame.Shape.NoFrame)
@@ -545,17 +523,14 @@ class MainWindow(QMainWindow):
         self.plots_layout.setContentsMargins(5, 5, 5, 5)
         self.plots_layout.setSpacing(20)
 
-        # Instanciação dos Painéis na ordem solicitada:
         self.panel_box = FigurePanel("box", "Boxplot", self._open_plot_from_panel)
         self.panel_graficos = FigurePanel("graficos", "Gráficos (Modelo)", self._open_plot_from_panel)
         self.panel_residuos = FigurePanel("residuos", "Resíduos Padronizados", self._open_plot_from_panel)
-        # NOVO: Distância de Cook inserida após os Resíduos
         self.panel_cooks = FigurePanel("cooks", "Distância de Cook", self._open_plot_from_panel)
         self.panel_corr = FigurePanel("corr", "Matriz de Correlação", self._open_plot_from_panel)
         self.panel_aderencia = FigurePanel("aderencia", "Aderência", self._open_plot_from_panel)
         self.panel_hist = FigurePanel("hist", "Histograma", self._open_plot_from_panel)
 
-        # Adiciona os painéis ao layout vertical da direita (Pilha)
         self.plots_layout.addWidget(self.panel_box)
         self.plots_layout.addWidget(self.panel_graficos)
         self.plots_layout.addWidget(self.panel_residuos)
@@ -567,7 +542,6 @@ class MainWindow(QMainWindow):
         self.scroll_right.setWidget(self.plots_container)
         self.split_main.addWidget(self.scroll_right)
 
-        # Adiciona o Splitter ao layout principal
         layout.addWidget(self.split_main, 1)
 
         self._update_action_states()
@@ -651,8 +625,6 @@ class MainWindow(QMainWindow):
         self.act_set_preco = self._make_action("&Definir variável dependente...", slot=self.set_preco, shortcut=QKeySequence("Ctrl+D"))
         self.act_fit = self._make_action("&Calcular (Fit MQO)", slot=self.fit_model, shortcut=QKeySequence("F5"))
         self.act_cancel = self._make_action("&Cancelar execução", slot=self.cancel_current, shortcut=QKeySequence("Esc"))
-        self.act_resultados = self._make_action("&Resultados", slot=self.resultados, shortcut=QKeySequence("Ctrl+T"))
-        self.act_select_model = self._make_action("&Selecionar modelo (idx)...", slot=self.selecionar_modelo, shortcut=QKeySequence("Ctrl+Enter"))
         self.act_clean_outliers = self._make_action("Limpar &Outliers...", slot=self.menu_limpar_outliers, shortcut=QKeySequence("Ctrl+L"))
         
         self.act_use_clean = self._make_action(
@@ -669,9 +641,6 @@ class MainWindow(QMainWindow):
         m_model.addSeparator()
         m_model.addAction(self.act_fit)
         m_model.addAction(self.act_cancel)
-        m_model.addSeparator()
-        m_model.addAction(self.act_resultados)
-        m_model.addAction(self.act_select_model)
         m_model.addSeparator()
         m_model.addAction(self.act_clean_outliers)
         m_model.addAction(self.act_use_clean)
@@ -771,8 +740,6 @@ class MainWindow(QMainWindow):
         self.act_fit.setEnabled(has_df and has_preco and (not is_running))
         self.act_cancel.setEnabled(is_running)
 
-        self.act_resultados.setEnabled(has_any_fit and (not is_running))
-        self.act_select_model.setEnabled(has_any_fit and (not is_running))
         self.act_clean_outliers.setEnabled(has_any_fit and (not is_running))
 
         # act_use_clean: só depois do Limpar Outliers
@@ -1133,7 +1100,15 @@ class MainWindow(QMainWindow):
                     self.log_sep()
             except Exception as e_sum:
                 self.log(f"Aviso: Falha ao gerar o resumo estatístico: {e_sum}")
-
+            
+            # --- 3. BATERIA DE TESTES AUTOMÁTICOS EM SEQUÊNCIA ---
+            self.run_shapiro()
+            self.run_kstest()
+            self.run_bp()
+            self.run_dw()
+            self.run_vif()
+            self.run_enquadramento()
+            
             self._update_action_states()
             self._refresh_plot_panels()
             self._update_dashboard()
@@ -1955,12 +1930,6 @@ class MainWindow(QMainWindow):
             self.log_sep()
             self.log(f"GRAU DE FUNDAMENTAÇÃO: {status[info['fundamentacao']]}")
             
-            # Se houver predição, mostra a precisão
-            if "precisao" in info:
-                self.log(f"GRAU DE PRECISÃO: {status[info['precisao']]} (Amplitude: {info['amplitude']:.2f}%)")
-            else:
-                self.log("GRAU DE PRECISÃO: Não calculado (realize uma Predição primeiro)")
-            
             self.log_sep()
 
         except Exception as e:
@@ -2654,3 +2623,7 @@ class MainWindow(QMainWindow):
         
         # Chama a lógica centralizada de processamento
         self._process_avaliandos_logic(path)
+
+    def focus_results_tab(self):
+        """Muda o foco para a aba de Resultados."""
+        self.tabs.setCurrentWidget(self.log_box)
