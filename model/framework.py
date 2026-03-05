@@ -1238,3 +1238,19 @@ class MQO:
             return True
         except:
             return False
+
+    def get_dist_residuos_stats(self, usar_limpo=False):
+        """Retorna os percentuais de resíduos em 1σ, 1.64σ e 1.96σ."""
+        import scipy.stats as st
+        modelo = self.modelo_limpo if usar_limpo else self.modelo
+        if modelo is None: return None
+        
+        resid = np.array(modelo.resid)
+        z_scores = st.zscore(resid)
+        z_tot = len(z_scores)
+
+        p1 = np.sum((z_scores >= -1) & (z_scores <= 1)) / z_tot
+        p164 = np.sum((z_scores >= -1.64) & (z_scores <= 1.64)) / z_tot
+        p196 = np.sum((z_scores >= -1.96) & (z_scores <= 1.96)) / z_tot
+
+        return p1, p164, p196

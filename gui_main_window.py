@@ -441,6 +441,7 @@ class MainWindow(QMainWindow):
         self.card_r2_adj = MetricCard("R² Ajustado")
         self.card_fund = MetricCard("Fundamentação")
         self.card_outliers = MetricCard("Outliers")
+        self.card_resid = MetricCard("Resíduos (68% 90% 95%)")
         self.card_norm = MetricCard("Normalidade (SW)")
         self.card_norm_ks = MetricCard("Normalidade (KS)")
         self.card_homoc = MetricCard("Homocedasticidade (BP)")
@@ -451,6 +452,7 @@ class MainWindow(QMainWindow):
         self.dash_layout.addWidget(self.card_r2_adj)
         self.dash_layout.addWidget(self.card_fund)
         self.dash_layout.addWidget(self.card_outliers)
+        self.dash_layout.addWidget(self.card_resid)
         self.dash_layout.addWidget(self.card_norm)
         self.dash_layout.addWidget(self.card_norm_ks)
         self.dash_layout.addWidget(self.card_homoc)
@@ -465,6 +467,7 @@ class MainWindow(QMainWindow):
         self.card_r2_adj.clicked.connect(self.focus_results_tab)
         self.card_fund.clicked.connect(self.focus_results_tab)
         self.card_outliers.clicked.connect(self.focus_results_tab)
+        self.card_resid.clicked.connect(self.focus_results_tab)
         self.card_norm.clicked.connect(self.focus_results_tab)
         self.card_norm_ks.clicked.connect(self.focus_results_tab)
         self.card_homoc.clicked.connect(self.focus_results_tab)
@@ -2377,6 +2380,19 @@ class MainWindow(QMainWindow):
                 cor_out = "#F44336" # Vermelho: Acima de 5% (Crítico)
             
             self.card_outliers.set_value(str(n_outliers), cor_out)
+            
+            stats_resid = self.model.get_dist_residuos_stats(usar_limpo=usar_limpo)
+            if stats_resid:
+                p1, p164, p196 = stats_resid
+                # Formata a string como solicitado: "XX% YY% ZZ%"
+                txt_resid = f"{p1:.0%} {p164:.0%} {p196:.0%}"
+                
+                # Critério de cor: 
+                # Verde se a soma dos desvios em relação ao teórico for pequena (< 15% total)
+                diff = abs(p1-0.68) + abs(p164-0.90) + abs(p196-0.95)
+                cor_resid = "#4CAF50" if diff < 0.15 else "#FFC107" if diff < 0.30 else "#F44336"
+                
+                self.card_resid.set_value(txt_resid, cor_resid)
             
         except Exception as e:
             print(f"Erro ao atualizar dashboard: {e}")
