@@ -440,6 +440,7 @@ class MainWindow(QMainWindow):
         self.card_r2 = MetricCard("R²")
         self.card_r2_adj = MetricCard("R² Ajustado")
         self.card_fund = MetricCard("Fundamentação")
+        self.card_outliers = MetricCard("Outliers")
         self.card_norm = MetricCard("Normalidade (SW)")
         self.card_norm_ks = MetricCard("Normalidade (KS)")
         self.card_homoc = MetricCard("Homocedasticidade (BP)")
@@ -449,6 +450,7 @@ class MainWindow(QMainWindow):
         self.dash_layout.addWidget(self.card_r2)
         self.dash_layout.addWidget(self.card_r2_adj)
         self.dash_layout.addWidget(self.card_fund)
+        self.dash_layout.addWidget(self.card_outliers)
         self.dash_layout.addWidget(self.card_norm)
         self.dash_layout.addWidget(self.card_norm_ks)
         self.dash_layout.addWidget(self.card_homoc)
@@ -462,6 +464,7 @@ class MainWindow(QMainWindow):
         self.card_r2.clicked.connect(self.focus_results_tab)
         self.card_r2_adj.clicked.connect(self.focus_results_tab)
         self.card_fund.clicked.connect(self.focus_results_tab)
+        self.card_outliers.clicked.connect(self.focus_results_tab)
         self.card_norm.clicked.connect(self.focus_results_tab)
         self.card_norm_ks.clicked.connect(self.focus_results_tab)
         self.card_homoc.clicked.connect(self.focus_results_tab)
@@ -2360,7 +2363,21 @@ class MainWindow(QMainWindow):
             graus = ["Inidôneo", "I", "II", "III"]
             g_fund = info_nbr['fundamentacao']
             self.card_fund.set_value(graus[g_fund], "#4CAF50" if g_fund >= 2 else "#FFC107" if g_fund == 1 else "#F44336")
-
+            
+            # --- LÓGICA DO NOVO CARD: OUTLIERS ---
+            n_outliers = self.model.outliers_qtd(idx, usar_limpo=usar_limpo)
+            n_total = int(res.nobs)
+            pct_out = (n_outliers / n_total) if n_total > 0 else 0
+            
+            if n_outliers == 0:
+                cor_out = "#4CAF50" # Verde: Perfeito
+            elif pct_out <= 0.05:
+                cor_out = "#FFC107" # Amarelo: Até 5% (Aceitável)
+            else:
+                cor_out = "#F44336" # Vermelho: Acima de 5% (Crítico)
+            
+            self.card_outliers.set_value(str(n_outliers), cor_out)
+            
         except Exception as e:
             print(f"Erro ao atualizar dashboard: {e}")
         
