@@ -697,17 +697,17 @@ class MQO:
         modelo = self.modelo_limpo if usar_limpo else self.modelo
         stat, pvalue = shapiro(modelo.resid)
 
-        print("\nTeste de Normalidade - Shapiro-Wilk")
-        print("-------------------------------------------")
-        print(f"Statistic : {stat:.6f}")
-        print(f"P-value   : {pvalue:.6f}")
-        print(f"Significância adotada: {significancia:.3f}")
-        print("-------------------------------------------")
-        print("Interpretação estatística:")
-        print(" - Hipótese nula: resíduos seguem distribuição normal")
-        print(" - p-value > significância → NÃO rejeita H0 → Normalidade OK")
-        print(" - p-value ≤ significância → Rejeita H0 → Resíduos NÃO normais")
-        print("-------------------------------------------")
+        self._log("\nTeste de Normalidade - Shapiro-Wilk")
+        self._log("-------------------------------------------")
+        self._log(f"Statistic : {stat:.6f}")
+        self._log(f"P-value   : {pvalue:.6f}")
+        self._log(f"Significância adotada: {significancia:.3f}")
+        self._log("-------------------------------------------")
+        self._log("Interpretação estatística:")
+        self._log(" - Hipótese nula: resíduos seguem distribuição normal")
+        self._log(" - p-value > significância → NÃO rejeita H0 → Normalidade OK")
+        self._log(" - p-value ≤ significância → Rejeita H0 → Resíduos NÃO normais")
+        self._log("-------------------------------------------")
 
         if pvalue > significancia:
             conclusao = (
@@ -720,7 +720,7 @@ class MQO:
                 "⚠️ O modelo OLS pode violar o pressuposto de normalidade."
             )
 
-        print(conclusao + "\n")
+        self._log(conclusao + "\n")
         # return {"statistic": stat, "pvalue": pvalue}
         return pvalue > significancia
 
@@ -732,12 +732,12 @@ class MQO:
 
         stat, pvalue = kstest(residuos_pad, 'norm')
 
-        print("\nTeste de Normalidade - Kolmogorov-Smirnov")
-        print("-------------------------------------------")
-        print(f"Statistic : {stat:.6f}")
-        print(f"P-value   : {pvalue:.6f}")
-        print(f"Significância adotada: {significancia:.3f}")
-        print("-------------------------------------------")
+        self._log("\nTeste de Normalidade - Kolmogorov-Smirnov")
+        self._log("-------------------------------------------")
+        self._log(f"Statistic : {stat:.6f}")
+        self._log(f"P-value   : {pvalue:.6f}")
+        self._log(f"Significância adotada: {significancia:.3f}")
+        self._log("-------------------------------------------")
 
         if pvalue > significancia:
             conclusao = (
@@ -750,7 +750,7 @@ class MQO:
                 "⚠️ O modelo OLS pode violar o pressuposto de normalidade."
             )
 
-        print(conclusao + "\n")
+        self._log(conclusao + "\n")
         return {"statistic": stat, "pvalue": pvalue}
 
     def histograma(self, usar_limpo=False, show=True):
@@ -789,12 +789,12 @@ class MQO:
         p164 = i164 / z_tot
         p196 = i196 / z_tot
 
-        print("\nDistribuição dos Resíduos (comparação com a Normal):")
-        print("------------------------------------------------------")
-        print(f"Faixa ±1.00σ  → Observado: {p1:6.3%} | Teórico ≈ 68%")
-        print(f"Faixa ±1.64σ  → Observado: {p164:6.3%} | Teórico ≈ 90%")
-        print(f"Faixa ±1.96σ  → Observado: {p196:6.3%} | Teórico ≈ 95%")
-        print("------------------------------------------------------")
+        self._log("\nDistribuição dos Resíduos (comparação com a Normal):")
+        self._log("------------------------------------------------------")
+        self._log(f"Faixa ±1.00σ  → Observado: {p1:6.3%} | Teórico ≈ 68%")
+        self._log(f"Faixa ±1.64σ  → Observado: {p164:6.3%} | Teórico ≈ 90%")
+        self._log(f"Faixa ±1.96σ  → Observado: {p196:6.3%} | Teórico ≈ 95%")
+        self._log("------------------------------------------------------")
 
     def heterocedasticidade(self, usar_limpo=False):
         import statsmodels.stats.api as sms
@@ -805,11 +805,11 @@ class MQO:
         test_result = sms.het_breuschpagan(modelo.resid, modelo.model.exog)
         resultado = dict(zip(names, test_result))
 
-        print("\nTeste de Heterocedasticidade - Breusch-Pagan")
-        print("------------------------------------------------")
+        self._log("\nTeste de Heterocedasticidade - Breusch-Pagan")
+        self._log("------------------------------------------------")
         for n, v in resultado.items():
-            print(f"{n:20s}: {v:.6f}")
-        print("------------------------------------------------")
+            self._log(f"{n:20s}: {v:.6f}")
+        self._log("------------------------------------------------")
 
         lm_pvalue = resultado['LM p-value']
         f_pvalue = resultado['F p-value']
@@ -825,7 +825,7 @@ class MQO:
                 "⚠️ O modelo OLS pode violar o pressuposto de homocedasticidade."
             )
 
-        print(conclusao + "\n")
+        self._log(conclusao + "\n")
         # return resultado
         return (lm_pvalue > 0.05) and (f_pvalue > 0.05)
 
@@ -835,10 +835,10 @@ class MQO:
         modelo = self.modelo_limpo if usar_limpo else self.modelo
         dw = durbin_watson(modelo.resid)
 
-        print("\nTeste de Autocorrelação - Durbin-Watson")
-        print("-------------------------------------------")
-        print(f"Durbin-Watson: {dw:.4f}")
-        print("-------------------------------------------")
+        self._log("\nTeste de Autocorrelação - Durbin-Watson")
+        self._log("-------------------------------------------")
+        self._log(f"Durbin-Watson: {dw:.4f}")
+        self._log("-------------------------------------------")
 
         if 1.5 <= dw <= 2.5:
             conclusao = (
@@ -851,7 +851,7 @@ class MQO:
                 "O modelo OLS pode violar o pressuposto de independência."
             )
 
-        print(conclusao + "\n")
+        self._log(conclusao + "\n")
         # return {"durbin_watson": dw}
         return 1.5 <= dw <= 2.5
 
@@ -874,10 +874,10 @@ class MQO:
 
         vif_sem_const = vif_df[vif_df["Variável"] != "const"]
 
-        print("\nTeste de Multicolinearidade - VIF")
-        print("-------------------------------------------")
-        print(vif_df)
-        print("-------------------------------------------")
+        self._log("\nTeste de Multicolinearidade - VIF")
+        self._log("-------------------------------------------")
+        self._log(vif_df)
+        self._log("-------------------------------------------")
 
         max_vif = vif_sem_const["VIF"].max()
 
@@ -888,7 +888,7 @@ class MQO:
         else:
             conclusao = "Conclusão: VIF ≥ 10 → multicolinearidade séria."
 
-        print(conclusao + "\n")
+        self._log(conclusao + "\n")
         return vif_df
 
     def residuos_grafico(self, usar_limpo=False, show=True):
