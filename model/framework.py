@@ -68,6 +68,29 @@ def _maybe_show_fig(fig, show: bool):
     except Exception:
         pass
 
+class LazyModelList(list):
+    """Lista inteligente que recria o modelo do statsmodels automaticamente 
+       apenas no momento em que ele é lido, economizando Gigabytes de RAM."""
+    def __init__(self, mqo_instance):
+        super().__init__()
+        self.mqo = mqo_instance
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self[i] for i in range(*idx.indices(len(self)))]
+        
+        val = super().__getitem__(idx)
+        if val is None:
+            # A mágica: se a interface tentar acessar um None, recriamos na hora!
+            try:
+                am = self.mqo.amostras[idx]
+                preco = self.mqo.preco
+                val = sm.OLS(am[preco], sm.add_constant(am.drop(columns=[preco]))).fit()
+                super().__setitem__(idx, val) # Salva no cache para não recalcular
+            except Exception:
+                pass
+        return val
+
 # ================================================================
 # CLASSE — MQO com suporte GUI
 # ================================================================
@@ -109,7 +132,7 @@ class MQO:
         self.preco = preco
         self.qtd_transf = int(qtd_transf)
         self.combinacoes = []
-        self.modelos = []
+        self.modelos = LazyModelList(self) # <-- Substitua aqui
         self.r2s = []
         self.colunas = list(amostra_ini.columns)
 
@@ -264,7 +287,7 @@ class MQO:
             return
 
         self.amostra_combinar()
-        self.modelos = []
+        self.modelos = LazyModelList(self) # <-- E substitua aqui
         self.r2s = []
 
         preco = self.preco
@@ -286,9 +309,11 @@ class MQO:
                 continue
 
             try:
+                # Ajustamos o modelo apenas para extrair e validar o R2
                 mdl = sm.OLS(am[preco], sm.add_constant(am.drop(columns=[preco]))).fit()
                 r2 = float(mdl.rsquared)
-                self.modelos.append(mdl)
+                
+                self.modelos.append(None) # MAGIA DA MEMÓRIA: Descartamos o objeto pesado e salvamos None
                 self.r2s.append(r2)
 
                 if r2 > best_r2:
@@ -300,8 +325,9 @@ class MQO:
                 self.r2s.append(0.0)
 
         if best_idx is not None:
+            # Ao definir o modelo, o "setter" recriará automaticamente APENAS este objeto
             self.modelo = best_idx
-            self.modelo_limpo = self.modelos[best_idx]
+            self.modelo_limpo = self.modelo 
             self.amostra_limpa = self.amostras[best_idx].copy()
             self.amostra_limpa_orig = self.amostras[0].copy()
         else:
@@ -360,7 +386,8 @@ class MQO:
             self._log(f"{Cor.YELLOW}Nada a listar (qtd={qtd}).{Cor.RESET}")
             return
 
-        valid = [(i, float(r2)) for i, r2 in enumerate(self.r2s) if (i < len(self.modelos) and self.modelos[i] is not None)]
+        # Modificado: Lê direto do R2 para evitar quebrar com a otimização de memória
+        valid = [(i, float(r2)) for i, r2 in enumerate(self.r2s) if float(r2) > 0.0]
         if not valid:
             self._log(f"{Cor.YELLOW}Nenhum modelo válido para listar.{Cor.RESET}")
             return
@@ -416,6 +443,42 @@ class MQO:
             self._log(linha)
 
     # ============================================================
+    # RESULTADOS EM TABELA (para GUI)
+    # ============================================================
+    def resultados_tabela(self, qtd=20) -> pd.DataFrame:
+        if not self.r2s:
+            return pd.DataFrame()
+
+        qtd = int(qtd)
+        if qtd <= 0:
+            return pd.DataFrame()
+
+        # Modificado: Lê direto do R2 para evitar quebrar com a otimização de memória
+        valid = [(i, float(r2)) for i, r2 in enumerate(self.r2s) if float(r2) > 0.0]
+        if not valid:
+            return pd.DataFrame()
+
+        valid.sort(key=lambda x: x[1], reverse=True)
+        ordenado = valid[:qtd]
+
+        rows = []
+        for idx, r2 in ordenado:
+            out = self.outliers_qtd(idx)
+            comb = self.combinacoes[idx]
+            descr = [self.transformada_print(t, varname) for t, varname in zip(comb, self.colunas)]
+
+            row = {
+                "idx": int(idx),
+                "R²": float(r2),
+                f"Outliers > {float(self.outliers_lim):g}": int(out),
+            }
+            for j, col in enumerate(self.colunas):
+                row[str(col)] = descr[j]
+            rows.append(row)
+
+        return pd.DataFrame(rows)
+
+    # ============================================================
     # PROPRIEDADE MODELO
     # ============================================================
     @property
@@ -426,10 +489,21 @@ class MQO:
     def modelo(self, idx):
         if not isinstance(idx, int):
             raise ValueError("Índice deve ser inteiro.")
-        if idx < 0 or idx >= len(self.modelos) or self.modelos[idx] is None:
+        if idx < 0 or idx >= len(self.modelos):
             raise ValueError(f"Modelo {idx} inexistente ou inválido.")
+            
         self._modelo_idx = idx
         self.amostra = self.amostras[idx]
+
+        # SE o modelo não estiver na memória, nós o instanciamos agora (sob demanda)
+        if self.modelos[idx] is None:
+            try:
+                self.modelos[idx] = sm.OLS(
+                    self.amostra[self.preco], 
+                    sm.add_constant(self.amostra.drop(columns=[self.preco]))
+                ).fit()
+            except Exception as e:
+                self._log(f"{Cor.YELLOW}Erro ao reconstruir modelo {idx}: {e}{Cor.RESET}")
 
         # reseta “limpo” ao trocar modelo
         self.amostra_limpa = None
@@ -1123,7 +1197,7 @@ class MQO:
             "boxplot": self.boxplot,
             "graficos": self.graficos,
             "residuos": self.residuos_grafico,
-            "cooks": self.cooks_distance_grafico, # <--- ADICIONADO AQUI
+            "cooks": self.cooks_distance_grafico, 
             "corr": self.matrix_corr,
             "aderencia": self.aderencia,
             "hist": self.histograma
@@ -1135,7 +1209,8 @@ class MQO:
                 path = os.path.join(diretorio, f"{nome}.png")
                 fig.savefig(path, dpi=150)
                 caminhos[nome] = path
-                plt.close(fig) # Limpa memória
+                fig.clf()      # <--- Limpeza forçada do Canvas do Matplotlib
+                plt.close(fig) # Fecha e descarta da memória
         return caminhos
 
     def cooks_distance_grafico(self, usar_limpo=False, show=True):

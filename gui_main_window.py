@@ -2735,6 +2735,9 @@ class MainWindow(QMainWindow):
         """Retorna a lista de índices (raw_idx) ordenados do maior para o menor R²."""
         if not self.model or getattr(self.model, "r2s", None) is None:
             return []
-        validos = [(i, float(r2)) for i, r2 in enumerate(self.model.r2s) if self.model.modelos[i] is not None]
+            
+        # O SEGREDO: Olha apenas para a lista de R2!
+        # Ignoramos a lista 'modelos' porque agora usamos Lazy Loading (são quase todos None)
+        validos = [(i, float(r2)) for i, r2 in enumerate(self.model.r2s) if float(r2) > 0.0]
         validos.sort(key=lambda x: x[1], reverse=True)
         return [i for i, r2 in validos]
