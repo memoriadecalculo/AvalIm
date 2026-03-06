@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QToolBar, QStyle, QCheckBox, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon, QColor
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QIcon, QColor, QValidator
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
@@ -46,6 +46,36 @@ from gui_style import load_dark_style, load_light_style
 
 from model import MQO
 
+class RankingSpinBox(QSpinBox):
+    """SpinBox que navega no ranking R2 internamente usando valores negativos."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ranking = []
+
+    def set_ranking(self, ranking_list):
+        self._ranking = ranking_list
+
+    def validate(self, text, pos):
+        # O SEGREDO ESTÁ AQUI: Dizemos ao PyQt que o texto é válido, 
+        # liberando o disparo automático do sinal 'valueChanged'.
+        return QValidator.State.Acceptable, text, pos
+
+    def textFromValue(self, val):
+        rank_idx = -val 
+        if not self._ranking or rank_idx < 0 or rank_idx >= len(self._ranking):
+            return ""
+        # Mostra APENAS o número bruto do modelo
+        return str(self._ranking[rank_idx])
+
+    def valueFromText(self, text):
+        try:
+            raw_idx = int(text)
+            if raw_idx in self._ranking:
+                rank_idx = self._ranking.index(raw_idx)
+                return -rank_idx
+        except ValueError:
+            pass
+        return self.value()
 
 class ClickableCanvas(FigureCanvas):
     def __init__(self, fig, on_dblclick=None, parent=None):
@@ -408,7 +438,7 @@ class MainWindow(QMainWindow):
         linha1.addStretch()
 
         linha1.addWidget(QLabel("Modelo:"))
-        self.spin_modelo = QSpinBox()
+        self.spin_modelo = RankingSpinBox() # <-- USA A CLASSE NOVA
         self.spin_modelo.setMinimum(0)
         self.spin_modelo.setMaximum(0)
         self.spin_modelo.setEnabled(False)
@@ -766,27 +796,44 @@ class MainWindow(QMainWindow):
         ]:
             act.setEnabled(has_any_fit and (not is_running))
 
+        # -------------------------------------------------------------
+        # BLOCO DO SPINBOX DE MODELOS (RANKING)
+        # -------------------------------------------------------------
         if has_any_fit and (not is_running):
-            n = self._num_modelos()
+            ranking = self._get_model_ranking()
             cur = self._current_idx()
-            if cur is None:
-                cur = 0
+            
+            # Descobre o índice (0-based) no ranking
+            try:
+                cur_rank = ranking.index(cur) if cur is not None else 0
+            except ValueError:
+                cur_rank = 0
+
             self._updating_model_spin = True
             try:
                 self.spin_modelo.setEnabled(True)
-                self.spin_modelo.setMaximum(max(0, n - 1))
-                self.spin_modelo.setValue(max(0, min(int(cur), max(0, n - 1))))
+                if hasattr(self.spin_modelo, 'set_ranking'):
+                    self.spin_modelo.set_ranking(ranking)
+                
+                # O range vai do pior modelo (negativo) até o melhor (0)
+                self.spin_modelo.setMinimum(-(len(ranking) - 1))
+                self.spin_modelo.setMaximum(0)
+                # Define o valor atual
+                self.spin_modelo.setValue(-cur_rank)
             finally:
                 self._updating_model_spin = False
         else:
             self._updating_model_spin = True
             try:
                 self.spin_modelo.setEnabled(False)
+                if hasattr(self.spin_modelo, 'set_ranking'):
+                    self.spin_modelo.set_ranking([])
                 self.spin_modelo.setMinimum(0)
                 self.spin_modelo.setMaximum(0)
                 self.spin_modelo.setValue(0)
             finally:
                 self._updating_model_spin = False
+        # -------------------------------------------------------------
 
         is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
         
@@ -1001,14 +1048,25 @@ class MainWindow(QMainWindow):
     # ============================================================
     # SPINBOX "Modelo"
     # ============================================================
-    def _on_model_spin_value_changed(self, value: int):
-        if self._updating_model_spin:
+    def _on_model_spin_value_changed(self, *args):
+        # O getattr garante que não dará erro caso a flag ainda não exista
+        if getattr(self, "_updating_model_spin", False):
             return
         if not self.spin_modelo.isEnabled():
             return
         if not self.model:
             return
-        self._apply_model_idx(int(value), log_source="(spin: setas)")
+            
+        # Pega o valor numérico (negativo) diretamente do componente
+        rank_idx = -self.spin_modelo.value()
+        ranking = self._get_model_ranking()
+        
+        if 0 <= rank_idx < len(ranking):
+            raw_idx = ranking[rank_idx]
+            
+            # Garante que só recalcula tudo se o modelo realmente mudou
+            if self._current_idx() != raw_idx:
+                self._apply_model_idx(raw_idx, log_source="(spin: setas)")
 
     def _on_model_spin_commit(self):
         if self._updating_model_spin:
@@ -1036,12 +1094,8 @@ class MainWindow(QMainWindow):
         if idx < 0 or idx >= n:
             self.log_action("Selecionar modelo")
             self.log(f"Índice inválido: {idx} (faixa: 0..{n-1})")
-            cur2 = cur if cur is not None else 0
-            self._updating_model_spin = True
-            try:
-                self.spin_modelo.setValue(int(cur2))
-            finally:
-                self._updating_model_spin = False
+            # Deixe o update de estados corrigir o erro automaticamente
+            self._update_action_states() 
             return
 
         try:
@@ -1137,19 +1191,19 @@ class MainWindow(QMainWindow):
             self.log("Nenhum modelo disponível.")
             return
 
+        # O diálogo continua pedindo o índice original (bruto) do modelo
         dlg = SelectModelDialog(self, max_idx=n - 1, current=(self._current_idx() or 0))
         if dlg.exec() == QDialog.DialogCode.Accepted:
             idx = dlg.selected()
             cur = self._current_idx()
+            
+            # Se o usuário escolheu o modelo que já está ativo, não fazemos nada
             if cur is not None and int(idx) == int(cur):
                 return
 
-            self._updating_model_spin = True
-            try:
-                self.spin_modelo.setValue(int(idx))
-            finally:
-                self._updating_model_spin = False
-
+            # Basta chamar a aplicação do modelo. 
+            # A interface (incluindo a nova posição no RankingSpinBox) 
+            # será atualizada automaticamente no final do processo via _update_action_states.
             self._apply_model_idx(int(idx), log_source="(menu)")
 
     # ============================================================
@@ -2660,3 +2714,11 @@ class MainWindow(QMainWindow):
     def focus_results_tab(self):
         """Muda o foco para a aba de Resultados."""
         self.tabs.setCurrentWidget(self.log_box)
+
+    def _get_model_ranking(self) -> list[int]:
+        """Retorna a lista de índices (raw_idx) ordenados do maior para o menor R²."""
+        if not self.model or getattr(self.model, "r2s", None) is None:
+            return []
+        validos = [(i, float(r2)) for i, r2 in enumerate(self.model.r2s) if self.model.modelos[i] is not None]
+        validos.sort(key=lambda x: x[1], reverse=True)
+        return [i for i, r2 in validos]
