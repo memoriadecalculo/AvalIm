@@ -121,12 +121,23 @@ class FigurePanel(QFrame):
         self.setToolTip(self._window_title)
 
     def set_figure(self, fig):
+        import matplotlib.pyplot as plt # Adicione este import local
+        
+        old_fig = self._fig
         self._fig = fig
 
         if self._canvas is not None:
             self.layout().removeWidget(self._canvas)
             self._canvas.deleteLater()
             self._canvas = None
+            
+        # O SEGREDO CONTRA O SEGFAULT: Matar a figura antiga no C++
+        if old_fig is not None:
+            try:
+                old_fig.clf()
+                plt.close(old_fig)
+            except Exception:
+                pass
 
         if fig is None:
             self.placeholder.show()
@@ -1013,7 +1024,6 @@ class MainWindow(QMainWindow):
         usar_limpo = self.usar_limpo()
         self.lbl_status.setText("Renderizando gráficos... (isso pode levar alguns segundos)")
         
-        # Lista de tarefas para iterar e permitir o processamento de eventos
         plot_tasks = [
             ("box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False)),
             ("graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False)),
@@ -1030,20 +1040,26 @@ class MainWindow(QMainWindow):
             "corr": self.panel_corr, "aderencia": self.panel_aderencia, "hist": self.panel_hist
         }
 
-        for name, call in plot_tasks:
-            # Verifica se um novo job de plotagem começou (evita renderizar o que já mudou)
-            if job_id != self._plots_job_id: return 
+        task_iter = iter(plot_tasks)
+
+        def _render_next():
+            if job_id != self._plots_job_id: return # Aborta se o usuário mudou de modelo
             
             try:
+                name, call = next(task_iter)
                 fig = call()
                 panels[name].set_figure(fig)
+                
+                # Agenda o próximo gráfico, deixando a interface respirar sem Segfault
+                QTimer.singleShot(10, _render_next)
+                
+            except StopIteration:
+                self.lbl_status.setText("Pilha de gráficos atualizada.")
             except Exception as e:
                 self.log(f"⚠️ Erro no gráfico '{name}': {e}")
-            
-            # --- O SEGREDO: Dá um fôlego para a Interface ---
-            QApplication.processEvents() 
+                QTimer.singleShot(10, _render_next) 
 
-        self.lbl_status.setText("Pilha de gráficos atualizada.")
+        _render_next()
 
     # ============================================================
     # SPINBOX "Modelo"
