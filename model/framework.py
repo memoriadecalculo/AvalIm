@@ -6,6 +6,7 @@ import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import threading
 from matplotlib.figure import Figure
+import pickle
 
 __all__ = ["MQO"]
 
@@ -1329,3 +1330,58 @@ class MQO:
         p196 = np.sum((z_scores >= -1.96) & (z_scores <= 1.96)) / z_tot
 
         return p1, p164, p196
+
+    # ============================================================
+    # SALVAR / CARREGAR PROJETO
+    # ============================================================
+    def salvar_projeto(self, filepath, extra_data=None):
+        """Congela o estado essencial da análise em um arquivo leve."""
+        estado = {
+            "amostra_ini": self.amostras[0],
+            "preco": self.preco,
+            "qtd_transf": self.qtd_transf,
+            "outliers_lim": self.outliers_lim,
+            "combinacoes": self.combinacoes,
+            "r2s": self.r2s,
+            "modelo_idx": self._modelo_idx,
+            "extra_data": extra_data # Guarda dados visuais da Interface (Avaliandos, etc)
+        }
+        with open(filepath, 'wb') as f:
+            pickle.dump(estado, f)
+
+    @classmethod
+    def carregar_projeto(cls, filepath, gui_log=None, gui_progress=None):
+        """Descongela o projeto e reconstrói as listas virtuais."""
+        with open(filepath, 'rb') as f:
+            estado = pickle.load(f)
+
+        # 1. Recria a instância base do MQO
+        obj = cls(
+            amostra_ini=estado["amostra_ini"],
+            preco=estado["preco"],
+            qtd_transf=estado["qtd_transf"],
+            outliers_lim=estado["outliers_lim"],
+            gui_log=gui_log,
+            gui_progress=gui_progress
+        )
+
+        # 2. Injeta os cálculos pesados que já foram feitos
+        obj.combinacoes = estado["combinacoes"]
+        obj.r2s = estado["r2s"]
+        
+        # Devolve os dados extras para a interface ler
+        obj.extra_data = estado.get("extra_data")
+
+        # 3. Recria as amostras transformadas na memória
+        if obj.combinacoes:
+            obj.amostra_combinar()
+            
+            # Recria a nossa lista inteligente (Lazy Loading) e estica para o tamanho real
+            obj.modelos = LazyModelList(obj)
+            obj.modelos.extend([None] * len(obj.combinacoes))
+
+            # Restaura o modelo que estava selecionado antes de salvar
+            if estado.get("modelo_idx") is not None:
+                obj.modelo = estado["modelo_idx"]
+
+        return obj

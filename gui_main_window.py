@@ -645,6 +645,22 @@ class MainWindow(QMainWindow):
             tip="Carregar planilha com os imóveis a serem avaliados"
         )
         
+        # ----------------------------------------------------
+        # NOVOS BOTÕES: ABRIR E SALVAR PROJETO
+        # ----------------------------------------------------
+        self.act_abrir_proj = self._make_action(
+            "A&brir Projeto (.mqo)...", 
+            slot=self.abrir_projeto, 
+            shortcut=QKeySequence("Ctrl+O")
+        )
+        
+        self.act_salvar_proj = self._make_action(
+            "&Salvar Projeto (.mqo)...", 
+            slot=self.salvar_projeto, 
+            shortcut=QKeySequence("Ctrl+S")
+        )
+        # ----------------------------------------------------
+        
         # 3. Exportar
         self.act_export = self._make_action(
             "Exportar Laudo PDF...", 
@@ -662,6 +678,12 @@ class MainWindow(QMainWindow):
         # Adicionando as ações ao menu na ordem lógica
         m_file.addAction(self.act_load_csv)
         m_file.addAction(self.act_load_avaliandos)
+        m_file.addSeparator()
+        
+        # ADICIONA NO MENU AQUI:
+        m_file.addAction(self.act_abrir_proj)
+        m_file.addAction(self.act_salvar_proj)
+        
         m_file.addSeparator()
         m_file.addAction(self.act_export)
         m_file.addSeparator()
@@ -2741,3 +2763,94 @@ class MainWindow(QMainWindow):
         validos = [(i, float(r2)) for i, r2 in enumerate(self.model.r2s) if float(r2) > 0.0]
         validos.sort(key=lambda x: x[1], reverse=True)
         return [i for i, r2 in validos]
+
+    def salvar_projeto(self):
+        if not self.model or not getattr(self.model, 'r2s', None):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Aviso", "Não há nenhuma análise processada para salvar.")
+            return
+
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Projeto", "", "Projeto Avaliação (*.mqo);;Todos os Arquivos (*)"
+        )
+        
+        if path:
+            try:
+                if not path.endswith('.mqo'):
+                    path += '.mqo'
+                
+                # Coleta os Avaliandos (se existirem) para salvar junto no arquivo
+                extra = {}
+                if hasattr(self, 'df_avaliandos') and self.df_avaliandos is not None:
+                    extra['avaliandos'] = self.df_avaliandos
+
+                self.model.salvar_projeto(path, extra_data=extra)
+                self.log(f"💾 Projeto salvo com sucesso em:\n{path}")
+            except Exception as e:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Erro", f"Falha ao salvar o projeto:\n{e}")
+
+    def abrir_projeto(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
+        import os
+        
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Abrir Projeto", "", "Projeto Avaliação (*.mqo);;Todos os Arquivos (*)"
+        )
+        
+        if path:
+            try:
+                self.log_box.clear()
+                self.log(f"📂 Carregando projeto...\n{path}")
+                self.lbl_status.setText("Reconstruindo matrizes matemáticas...")
+                QApplication.processEvents() 
+
+                from model import MQO 
+                
+                # 1. Carrega o núcleo matemático
+                self.model = MQO.carregar_projeto(path, gui_log=self.log, gui_progress=self.progress_slot)
+
+                # 2. Restaura o estado da Janela Principal
+                self.df = self.model.amostras[0] 
+                self.preco = self.model.preco
+                self.csv_path = path
+                self.lbl_arquivo.setText(f"Arquivo: {os.path.basename(path)}")
+                
+                # 3. Preenche visualmente a aba de Dados (COM checkbox)
+                self._fill_table_from_df(self.table_dados, self.df)
+
+                # 4. Restaura os Avaliandos (SEM checkbox, estrutura exata para predição)
+                if self.model.extra_data and 'avaliandos' in self.model.extra_data:
+                    self.df_avaliandos = self.model.extra_data['avaliandos']
+                    df_av = self.df_avaliandos
+                    cols_originais = list(df_av.columns)
+                    novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
+                    
+                    self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
+                    self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
+                    self.table_avaliandos.setRowCount(len(df_av))
+                    
+                    for r in range(len(df_av)):
+                        for c in range(len(cols_originais)):
+                            val = df_av.iat[r, c]
+                            text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
+                            self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
+
+                # 5. Atualiza as travas de menus e Spinbox
+                self._update_action_states()
+
+                # 6. Força a Interface a re-escrever Resultados, Equações, Gráficos e AVALIANDOS
+                if self.model._modelo_idx is not None:
+                    idx_salvo = self.model._modelo_idx
+                    self.model._modelo_idx = None # Truque rápido para forçar o recálculo visual de TUDO
+                    self._apply_model_idx(idx_salvo, log_source="(Projeto Carregado)")
+
+                # 7. Refaz a Tabela Grande (Aba Resultados)
+                self.resultados()
+                
+                self.lbl_status.setText("Projeto carregado com sucesso.")
+                self.tabs.setCurrentWidget(self.log_box) # Foca na aba Resultados
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"O arquivo parece corrompido ou é incompatível:\n{e}")
