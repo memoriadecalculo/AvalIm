@@ -916,6 +916,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btn_pdf_tool'):
             # Habilitado apenas se NÃO estiver calculando e se HOUVER um modelo pronto
             self.btn_pdf_tool.setEnabled(not is_running and has_any_fit)
+        
+        # Controle dos novos botões de Projeto na Toolbar
+        if hasattr(self, 'btn_abrir_proj_tool'):
+            # Pode abrir projeto a qualquer momento, desde que não esteja rodando cálculo
+            self.btn_abrir_proj_tool.setEnabled(not is_running)
+            
+        if hasattr(self, 'btn_salvar_proj_tool'):
+            # Só pode salvar se não estiver rodando cálculo E houver um modelo matemático pronto
+            self.btn_salvar_proj_tool.setEnabled(not is_running and has_any_fit)
 
     # ============================================================
     # Helpers gerais
@@ -2336,7 +2345,24 @@ class MainWindow(QMainWindow):
         toolbar.setIconSize(QSize(32, 32)) # Ícones grandes e visíveis
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+        
+        # ==========================================================
+        # 1. ABRIR E SALVAR PROJETO (.mqo)
+        # ==========================================================
+        # Ícone padrão de 'Abrir Pasta' do sistema
+        icon_open_proj = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        self.btn_abrir_proj_tool = toolbar.addAction(icon_open_proj, "Abrir Projeto (.mqo)")
+        self.btn_abrir_proj_tool.triggered.connect(self.abrir_projeto)
+        self.btn_abrir_proj_tool.setToolTip("Abrir um projeto salvo anteriormente (Ctrl+O)")
 
+        # Ícone padrão de 'Disquete / Salvar' do sistema
+        icon_save_proj = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        self.btn_salvar_proj_tool = toolbar.addAction(icon_save_proj, "Salvar Projeto (.mqo)")
+        self.btn_salvar_proj_tool.triggered.connect(self.salvar_projeto)
+        self.btn_salvar_proj_tool.setToolTip("Salvar o projeto atual (Ctrl+S)")
+        
+        toolbar.addSeparator() # <-- SEPARADOR SOLICITADO
+        
         # CARREGAR DADOS (+)
         # Usamos o ícone de 'Adicionar' ou 'Abrir' do sistema
         icon_add = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
@@ -2792,65 +2818,110 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Erro", f"Falha ao salvar o projeto:\n{e}")
 
     def abrir_projeto(self):
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
-        import os
-        
+        from PyQt6.QtWidgets import QFileDialog
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Abrir Projeto", "", "Projeto Avaliação (*.mqo);;Todos os Arquivos (*)"
         )
         
-        if path:
-            try:
-                self.log_box.clear()
-                self.log(f"📂 Carregando projeto...\n{path}")
-                self.lbl_status.setText("Reconstruindo matrizes matemáticas...")
-                QApplication.processEvents() 
+        if not path:
+            return
 
-                from model import MQO 
+        self.log_box.clear()
+        self.log(f"📂 Iniciando carregamento em segundo plano...\n{path}")
+        self.lbl_status.setText("Reconstruindo matrizes matemáticas... (Isso pode levar alguns segundos)")
+        self.progress.setValue(0)
+
+        # Guarda o caminho numa variável da classe para o callback poder ler depois
+        self._caminho_projeto_carregando = path 
+
+        # ==========================================================
+        # Chama o Worker passando um "Bound Method" legítimo
+        # ==========================================================
+        from gui_worker import start_worker
+        th = start_worker(
+            self._tarefa_carregar_projeto, 
+            self.log, 
+            self.progress_slot, 
+            callback=self._ao_terminar_carregamento, 
+            kwargs={"path": path}, # Passamos o caminho como argumento
+            owner=self
+        )
+        self.threads.append(th)
+        self._register_blocking_thread(th) # Trava a tela para segurança
+
+    # ============================================================
+    # MÉTODOS AUXILIARES PARA A THREAD (Obrigatórios para o Worker)
+    # ============================================================
+    def _tarefa_carregar_projeto(self, path):
+        """Executa a recriação pesada em background (Thread secundária)."""
+        from model import MQO 
+        # O SEGREDO CONTRA O SEGFAULT: Não enviamos a GUI para dentro da Thread!
+        # Passamos None para que o carregamento aconteça de forma silenciosa e 100% segura.
+        return MQO.carregar_projeto(path, gui_log=None, gui_progress=None)
+
+    def _ao_terminar_carregamento(self, model_carregado):
+        """Reconstrói a Interface Gráfica assim que a Thread Matemática termina."""
+        from PyQt6.QtWidgets import QMessageBox, QTableWidgetItem
+        import os
+
+        if model_carregado is None:
+            self.lbl_status.setText("Falha ao carregar o projeto.")
+            return
+
+        try:
+            # 1. Recebe o núcleo matemático reconstruído
+            self.model = model_carregado
+            
+            # 2. RESTAURA OS CALLBACKS DE GUI!
+            # Agora que estamos de volta à Thread Principal (segura), reconectamos os painéis
+            self.model.gui_log = self.log
+            self.model.gui_progress = self.progress_slot
+
+            # 3. Restaura o estado da Janela Principal
+            self.df = self.model.amostras[0] 
+            self.preco = self.model.preco
+            
+            # Puxa a variável guardada no iniciar do processo
+            self.csv_path = getattr(self, "_caminho_projeto_carregando", "projeto.mqo")
+            self.lbl_arquivo.setText(f"Arquivo: {os.path.basename(self.csv_path)}")
+            
+            # 4. Preenche visualmente a aba de Dados
+            self._fill_table_from_df(self.table_dados, self.df)
+
+            # 5. Restaura os Avaliandos
+            if self.model.extra_data and 'avaliandos' in self.model.extra_data:
+                self.df_avaliandos = self.model.extra_data['avaliandos']
+                df_av = self.df_avaliandos
+                cols_originais = list(df_av.columns)
+                novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
                 
-                # 1. Carrega o núcleo matemático
-                self.model = MQO.carregar_projeto(path, gui_log=self.log, gui_progress=self.progress_slot)
-
-                # 2. Restaura o estado da Janela Principal
-                self.df = self.model.amostras[0] 
-                self.preco = self.model.preco
-                self.csv_path = path
-                self.lbl_arquivo.setText(f"Arquivo: {os.path.basename(path)}")
+                self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
+                self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
+                self.table_avaliandos.setRowCount(len(df_av))
                 
-                # 3. Preenche visualmente a aba de Dados (COM checkbox)
-                self._fill_table_from_df(self.table_dados, self.df)
+                for r in range(len(df_av)):
+                    for c in range(len(cols_originais)):
+                        val = df_av.iat[r, c]
+                        text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
+                        self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
 
-                # 4. Restaura os Avaliandos (SEM checkbox, estrutura exata para predição)
-                if self.model.extra_data and 'avaliandos' in self.model.extra_data:
-                    self.df_avaliandos = self.model.extra_data['avaliandos']
-                    df_av = self.df_avaliandos
-                    cols_originais = list(df_av.columns)
-                    novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
-                    
-                    self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
-                    self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
-                    self.table_avaliandos.setRowCount(len(df_av))
-                    
-                    for r in range(len(df_av)):
-                        for c in range(len(cols_originais)):
-                            val = df_av.iat[r, c]
-                            text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
-                            self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
+            # 6. Atualiza as travas de menus e Spinbox
+            self._update_action_states()
 
-                # 5. Atualiza as travas de menus e Spinbox
-                self._update_action_states()
+            # 7. Força a Interface a re-escrever tudo
+            if self.model._modelo_idx is not None:
+                idx_salvo = self.model._modelo_idx
+                self.model._modelo_idx = None # Truque para engatilhar redesenho completo
+                self._apply_model_idx(idx_salvo, log_source="(Projeto Carregado)")
 
-                # 6. Força a Interface a re-escrever Resultados, Equações, Gráficos e AVALIANDOS
-                if self.model._modelo_idx is not None:
-                    idx_salvo = self.model._modelo_idx
-                    self.model._modelo_idx = None # Truque rápido para forçar o recálculo visual de TUDO
-                    self._apply_model_idx(idx_salvo, log_source="(Projeto Carregado)")
-
-                # 7. Refaz a Tabela Grande (Aba Resultados)
-                self.resultados()
-                
-                self.lbl_status.setText("Projeto carregado com sucesso.")
-                self.tabs.setCurrentWidget(self.log_box) # Foca na aba Resultados
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", f"O arquivo parece corrompido ou é incompatível:\n{e}")
+            # 8. Refaz a Tabela Grande
+            self.resultados()
+            
+            self.lbl_status.setText("Projeto carregado com sucesso.")
+            self.progress.setValue(100)
+            self.tabs.setCurrentWidget(self.log_box) 
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao desenhar a interface do projeto:\n{e}")
+            self.lbl_status.setText("Erro ao carregar.")
