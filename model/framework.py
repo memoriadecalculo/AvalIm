@@ -635,6 +635,11 @@ class MQO:
         if self.amostra is None or self.modelo is None:
             raise ValueError("Selecione um modelo antes.")
 
+        # 1. Conta quantos outliers existem ANTES da limpeza
+        influ_ini = self.modelo.get_influence()
+        resid_ini = influ_ini.resid_studentized_internal
+        outliers_iniciais = int(np.sum(np.abs(resid_ini) > self.outliers_lim))
+
         self.amostra_limpa = self.amostra.copy().reset_index(drop=True)
         self.amostra_limpa_orig = self.amostras[0].copy().reset_index(drop=True)
         self.modelo_limpo = self.modelo
@@ -651,11 +656,11 @@ class MQO:
         ).fit()
 
         R2_velho = float(modelo.rsquared)
-        removidos = 0
+        linhas_removidas = 0
 
         for i in range(max(out_n, 0)):
             if self._cancelled():
-                self._log(f"{Cor.YELLOW}Outliers_exc cancelado pelo usuário.{Cor.RESET}")
+                self._log(f"{Cor.YELLOW}Saneamento cancelado pelo usuário.{Cor.RESET}")
                 break
 
             influence = modelo.get_influence()
@@ -663,7 +668,7 @@ class MQO:
             resid_max = float(np.max(np.abs(resid_pad)))
 
             if resid_max < float(self.outliers_lim):
-                self._log("Resíduo máximo atingido!")
+                self._log("Nenhum resíduo acima do limite encontrado!")
                 break
 
             pos = int(np.argmax(np.abs(resid_pad)))
@@ -677,23 +682,35 @@ class MQO:
             ).fit()
 
             R2_novo = float(modelo.rsquared)
-            removidos = i + 1
+            linhas_removidas = i + 1
 
             if R2_novo < R2_velho:
                 if conv_i >= conv_n:
-                    self._log("Exclusão de outliers não convergiu.")
-                    self._log(f"Outliers removidos: {removidos}")
+                    self._log("Exclusão iterativa interrompida (não convergiu).")
                     break
                 conv_i += 1
             else:
                 R2_velho = R2_novo
 
             if R2_novo >= float(R2_alvo):
-                self._log(f"Outliers removidos: {removidos}")
+                self._log(f"R² Alvo atingido: {R2_novo:.4f}")
                 break
 
         self.modelo_limpo = modelo
-        return self.amostra_limpa, self.modelo_limpo, self.amostra_limpa_orig, removidos
+
+        # 2. Conta quantos outliers sobraram DEPOIS da limpeza
+        influ_fim = self.modelo_limpo.get_influence()
+        resid_fim = influ_fim.resid_studentized_internal
+        outliers_finais = int(np.sum(np.abs(resid_fim) > self.outliers_lim))
+        
+        outliers_resolvidos = outliers_iniciais - outliers_finais
+
+        self._log("Resumo do Saneamento:")
+        self._log(f" -> Linhas excluídas da tabela: {linhas_removidas}")
+        self._log(f" -> Outliers resolvidos no modelo: {outliers_resolvidos}")
+
+        # Retorna agora 5 parâmetros em vez de 4
+        return self.amostra_limpa, self.modelo_limpo, self.amostra_limpa_orig, linhas_removidas, outliers_resolvidos
 
     # ============================================================
     # MATRIZ DE CORRELAÇÃO (adaptado p/ GUI)

@@ -236,49 +236,6 @@ class SelectModelDialog(QDialog):
         return int(self.spin.value())
 
 
-class CleanOutliersDialog(QDialog):
-    def __init__(self, parent: QMainWindow, r2_alvo: float, lim_sigma: float):
-        super().__init__(parent)
-        self.setWindowTitle("Limpar Outliers")
-        self.setModal(True)
-        self.setMinimumWidth(460)
-
-        root = QVBoxLayout(self)
-
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("R² alvo:"))
-        self.spin_r2 = QDoubleSpinBox()
-        self.spin_r2.setDecimals(3)
-        self.spin_r2.setSingleStep(0.01)
-        self.spin_r2.setRange(0.0, 0.999)
-        self.spin_r2.setValue(float(r2_alvo))
-        row1.addWidget(self.spin_r2)
-        root.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("lim σ:"))
-        self.spin_sigma = QSpinBox()
-        self.spin_sigma.setRange(1, 10)
-        self.spin_sigma.setValue(int(round(float(lim_sigma))))
-        row2.addWidget(self.spin_sigma)
-        root.addLayout(row2)
-
-        rowb = QHBoxLayout()
-        rowb.addStretch()
-
-        btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
-        rowb.addWidget(btn_cancel)
-
-        btn_ok = QPushButton("Limpar")
-        btn_ok.setDefault(True)
-        btn_ok.clicked.connect(self.accept)
-        rowb.addWidget(btn_ok)
-
-        root.addLayout(rowb)
-
-    def values(self) -> tuple[float, float]:
-        return float(self.spin_r2.value()), float(self.spin_sigma.value())
 
 class PredictionDialog(QDialog):
     def __init__(self, parent, x_columns, current_y):
@@ -333,6 +290,77 @@ class PredictionDialog(QDialog):
             "valores": {col: spin.value() for col, spin in self.inputs.items()},
             "multiplicador_col": self.combo_multi.currentText()
         }
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent, current_config):
+        super().__init__(parent)
+        self.setWindowTitle("Configurações do Sistema")
+        self.setModal(True)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        self.spins = {}
+
+        # 1. Limite de Outliers (Desvios)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Limite de Outliers (Desvios Padrão):"))
+        spin_lim = QDoubleSpinBox()
+        spin_lim.setRange(1.0, 5.0)
+        spin_lim.setSingleStep(0.1)
+        spin_lim.setValue(current_config.get('outliers_lim', 2.0))
+        self.spins['outliers_lim'] = spin_lim
+        row.addWidget(spin_lim)
+        layout.addLayout(row)
+
+        # 2. R² Alvo (Para o Saneamento Automático)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("R² Alvo (Saneamento Automático):"))
+        spin_r2 = QDoubleSpinBox()
+        spin_r2.setRange(0.0, 0.999)
+        spin_r2.setSingleStep(0.01)
+        spin_r2.setValue(current_config.get('r2_alvo', 0.75))
+        self.spins['r2_alvo'] = spin_r2
+        row.addWidget(spin_r2)
+        layout.addLayout(row)
+
+        # 3. Máximo de Outliers Removíveis (% da Amostra)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Máx. de Outliers Removíveis (%):"))
+        spin_max_out = QDoubleSpinBox()
+        spin_max_out.setRange(0.01, 0.50)
+        spin_max_out.setSingleStep(0.01)
+        spin_max_out.setValue(current_config.get('max_outliers_pct', 0.20))
+        self.spins['max_outliers_pct'] = spin_max_out
+        row.addWidget(spin_max_out)
+        layout.addLayout(row)
+
+        # 4. Máximo de Modelos na Tabela
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Modelos gerados na Tabela (Resultados):"))
+        spin_modelos = QSpinBox()
+        spin_modelos.setRange(50, 5000)
+        spin_modelos.setSingleStep(50)
+        spin_modelos.setValue(current_config.get('max_modelos_tabela', 500))
+        self.spins['max_modelos_tabela'] = spin_modelos
+        row.addWidget(spin_modelos)
+        layout.addLayout(row)
+
+        layout.addWidget(QFrame(frameShape=QFrame.Shape.HLine))
+
+        btns = QHBoxLayout()
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(btn_cancel)
+
+        btn_ok = QPushButton("Salvar Configurações")
+        btn_ok.setDefault(True)
+        btn_ok.clicked.connect(self.accept)
+        btns.addWidget(btn_ok)
+
+        layout.addLayout(btns)
+
+    def get_config(self):
+        return {k: v.value() for k, v in self.spins.items()}
 
 class DropTableWidget(QTableWidget):
     """Uma Tabela que aceita arrastar e soltar arquivos."""
@@ -418,8 +446,15 @@ class MainWindow(QMainWindow):
         self.model = None
         self.preco = None
         self.csv_path = None
-        self.outliers_lim = 2.0
-        self.R2_alvo = 0.75
+        
+        # DICIONÁRIO CENTRAL DE CONFIGURAÇÕES
+        self.config = {
+            'outliers_lim': 2.0,
+            'r2_alvo': 0.75,
+            'max_outliers_pct': 0.20,
+            'conv_lim': 0.5,
+            'max_modelos_tabela': 500
+        }
         self._usar_limpo_flag = False
         self._limpo_ready = False
         self._limpo_ready_idx = None
@@ -503,16 +538,45 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(self.dash_layout)
         
-        # ALTERADO: Conexão dos cliques para focar na aba Resultados
+        # ==========================================================
+        # CONEXÃO DOS CLIQUES NOS CARDS DO DASHBOARD
+        # ==========================================================
+        # 1. Cards básicos: Apenas levam o usuário para a aba de resultados
+        self.card_r2.clicked.connect(self.run_summary)
         self.card_r2.clicked.connect(self.focus_results_tab)
+        
+        self.card_r2_adj.clicked.connect(self.run_summary)
         self.card_r2_adj.clicked.connect(self.focus_results_tab)
+        
+        self.card_fund.clicked.connect(self.run_enquadramento)
         self.card_fund.clicked.connect(self.focus_results_tab)
+        
         self.card_outliers.clicked.connect(self.focus_results_tab)
+        
+        self.card_resid.clicked.connect(self.run_distribuicao_residuos)
         self.card_resid.clicked.connect(self.focus_results_tab)
+
+        # 2. Cards de Testes Estatísticos: Executam o teste correspondente 
+        # (e também garantem que a tela mude para a aba Resultados para ver o log)
+        
+        # Normalidade SW (Shapiro)
+        self.card_norm.clicked.connect(self.run_shapiro)
         self.card_norm.clicked.connect(self.focus_results_tab)
+        
+        # Normalidade KS
+        self.card_norm_ks.clicked.connect(self.run_kstest)
         self.card_norm_ks.clicked.connect(self.focus_results_tab)
+        
+        # Homocedasticidade (BP)
+        self.card_homoc.clicked.connect(self.run_bp)
         self.card_homoc.clicked.connect(self.focus_results_tab)
+        
+        # Autocorrelação (DW)
+        self.card_auto.clicked.connect(self.run_dw)
         self.card_auto.clicked.connect(self.focus_results_tab)
+        
+        # Multicolinearidade (VIF)
+        self.card_vif.clicked.connect(self.run_vif)
         self.card_vif.clicked.connect(self.focus_results_tab)
         
         # --- SPLITTER PRINCIPAL ---
@@ -630,21 +694,6 @@ class MainWindow(QMainWindow):
         # --- MENU ARQUIVO ---
         m_file = mb.addMenu("&Arquivo")
         
-        # 1. Carregar Dados (Mercado)
-        self.act_load_csv = self._make_action(
-            "Carregar &Dados...", 
-            slot=self.load_csv, 
-            shortcut=QKeySequence.StandardKey.Open
-        )
-        
-        # 2. Carregar Avaliandos (Alvos)
-        self.act_load_avaliandos = self._make_action(
-            "Carregar &Avaliandos...", 
-            slot=self.load_avaliandos_csv, 
-            shortcut=QKeySequence("Ctrl+Shift+A"),
-            tip="Carregar planilha com os imóveis a serem avaliados"
-        )
-        
         # ----------------------------------------------------
         # NOVOS BOTÕES: ABRIR E SALVAR PROJETO
         # ----------------------------------------------------
@@ -661,6 +710,21 @@ class MainWindow(QMainWindow):
         )
         # ----------------------------------------------------
         
+        # 1. Carregar Dados (Mercado)
+        self.act_load_csv = self._make_action(
+            "Carregar &Dados...", 
+            slot=self.load_csv, 
+            shortcut=QKeySequence.StandardKey.Open
+        )
+        
+        # 2. Carregar Avaliandos (Alvos)
+        self.act_load_avaliandos = self._make_action(
+            "Carregar &Avaliandos...", 
+            slot=self.load_avaliandos_csv, 
+            shortcut=QKeySequence("Ctrl+Shift+A"),
+            tip="Carregar planilha com os imóveis a serem avaliados"
+        )
+        
         # 3. Exportar
         self.act_export = self._make_action(
             "Exportar Laudo PDF...", 
@@ -676,17 +740,27 @@ class MainWindow(QMainWindow):
         )
 
         # Adicionando as ações ao menu na ordem lógica
+        m_file.addAction(self.act_abrir_proj)
+        m_file.addAction(self.act_salvar_proj)
+        m_file.addSeparator()
+        
+        # ADICIONA NO MENU AQUI:
         m_file.addAction(self.act_load_csv)
         m_file.addAction(self.act_load_avaliandos)
         m_file.addSeparator()
         
-        # ADICIONA NO MENU AQUI:
-        m_file.addAction(self.act_abrir_proj)
-        m_file.addAction(self.act_salvar_proj)
-        
-        m_file.addSeparator()
         m_file.addAction(self.act_export)
         m_file.addSeparator()
+        
+        # Ação de Configurações
+        self.act_settings = self._make_action(
+            "C&onfigurações...", 
+            slot=self.open_settings, 
+            shortcut=QKeySequence("Ctrl+P")
+        )
+        m_file.addAction(self.act_settings)
+        m_file.addSeparator()
+        
         m_file.addAction(self.act_exit)
 
         # --- MENU MODELO ---
@@ -694,7 +768,7 @@ class MainWindow(QMainWindow):
         self.act_set_preco = self._make_action("&Definir variável dependente...", slot=self.set_preco, shortcut=QKeySequence("Ctrl+D"))
         self.act_fit = self._make_action("&Calcular (Fit MQO)", slot=self.fit_model, shortcut=QKeySequence("F5"))
         self.act_cancel = self._make_action("&Cancelar execução", slot=self.cancel_current, shortcut=QKeySequence("Esc"))
-        self.act_clean_outliers = self._make_action("Limpar &Outliers...", slot=self.menu_limpar_outliers, shortcut=QKeySequence("Ctrl+L"))
+        self.act_clean_outliers = self._make_action("Limpar &Outliers", slot=self.run_outliers_exc, shortcut=QKeySequence("Ctrl+L"))
         
         self.act_use_clean = self._make_action(
             "Usar o modelo sem outliers?",
@@ -790,7 +864,11 @@ class MainWindow(QMainWindow):
         has_model = self.model is not None
         has_any_fit = has_model and (getattr(self.model, "r2s", None) is not None) and (len(getattr(self.model, "r2s", [])) > 0)
 
-        is_running = (self._current_fit_thread is not None) or (len(self._blocking_threads) > 0)
+        # Agora a interface sabe que desenhar gráficos e tabelas também é "trabalho em andamento"
+        is_running = (self._current_fit_thread is not None) or \
+                     (len(self._blocking_threads) > 0) or \
+                     getattr(self, '_is_rendering_plots', False) or \
+                     getattr(self, '_is_building_table', False)
         
         # habilita "usar_limpo" somente se:
         # - já houve fit
@@ -1050,19 +1128,20 @@ class MainWindow(QMainWindow):
 
     def _make_all_plots_main(self, job_id: int):
         if job_id != self._plots_job_id or not self.model:
+            self._is_rendering_plots = False
+            self._update_action_states()
             return
 
         usar_limpo = self.usar_limpo()
-        self.lbl_status.setText("Renderizando gráficos... (isso pode levar alguns segundos)")
         
         plot_tasks = [
-            ("box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False)),
-            ("graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False)),
-            ("residuos", lambda: self.model.residuos_grafico(usar_limpo=usar_limpo, show=False)),
-            ("cooks", lambda: self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False)),
-            ("corr", lambda: self.model.matrix_corr(usar_limpo=usar_limpo, show=False)),
-            ("aderencia", lambda: self.model.aderencia(usar_limpo=usar_limpo, show=False)),
-            ("hist", lambda: self.model.histograma(usar_limpo=usar_limpo, show=False))
+            ("Boxplot", "box", lambda: self.model.boxplot(usar_limpo=usar_limpo, show=False)),
+            ("Gráficos de Ajuste", "graficos", lambda: self.model.graficos(usar_limpo=usar_limpo, show=False)),
+            ("Resíduos Padronizados", "residuos", lambda: self.model.residuos_grafico(usar_limpo=usar_limpo, show=False)),
+            ("Distância de Cook", "cooks", lambda: self.model.cooks_distance_grafico(usar_limpo=usar_limpo, show=False)),
+            ("Correlação", "corr", lambda: self.model.matrix_corr(usar_limpo=usar_limpo, show=False)),
+            ("Aderência", "aderencia", lambda: self.model.aderencia(usar_limpo=usar_limpo, show=False)),
+            ("Histograma", "hist", lambda: self.model.histograma(usar_limpo=usar_limpo, show=False))
         ]
 
         panels = {
@@ -1072,20 +1151,45 @@ class MainWindow(QMainWindow):
         }
 
         task_iter = iter(plot_tasks)
+        total_plots = len(plot_tasks)
+        plots_feitos = 0
+        
+        # Pega o progresso atual (deixado pelas equações) para calcular o passo
+        prog_inicial = self.progress.value()
+        passo = (100 - prog_inicial) / total_plots if total_plots > 0 else 0
 
         def _render_next():
-            if job_id != self._plots_job_id: return # Aborta se o usuário mudou de modelo
+            nonlocal plots_feitos
+            if job_id != self._plots_job_id: return # Abortado por novo clique
             
             try:
-                name, call = next(task_iter)
+                task_name, name, call = next(task_iter)
+                
+                # Avisa ao usuário qual gráfico está desenhando
+                self.lbl_status.setText(f"Desenhando {task_name} ({plots_feitos+1}/{total_plots})...")
+                from PyQt6.QtWidgets import QApplication
+                QApplication.processEvents() 
+                
                 fig = call()
                 panels[name].set_figure(fig)
                 
-                # Agenda o próximo gráfico, deixando a interface respirar sem Segfault
+                plots_feitos += 1
+                self.progress.setValue(int(prog_inicial + (plots_feitos * passo)))
+                
                 QTimer.singleShot(10, _render_next)
                 
             except StopIteration:
-                self.lbl_status.setText("Pilha de gráficos atualizada.")
+                self._is_rendering_plots = False
+                
+                # Se a Tabela Gigante já acabou de carregar, dizemos 100% Concluído
+                if not getattr(self, '_is_building_table', False):
+                    self.lbl_status.setText(f"Concluído (Modelo selecionado: {self._current_idx()})")
+                    self.progress.setValue(100)
+                else:
+                    self.lbl_status.setText("Finalizando colunas da Tabela...")
+                    
+                self._update_action_states()
+                
             except Exception as e:
                 self.log(f"⚠️ Erro no gráfico '{name}': {e}")
                 QTimer.singleShot(10, _render_next) 
@@ -1162,7 +1266,20 @@ class MainWindow(QMainWindow):
             self.log_action("Selecionar modelo")
             self.log(f"Modelo selecionado: {idx} {log_source if log_source != '(force)' else ''}".rstrip())
 
+            from PyQt6.QtWidgets import QApplication
+            
+            # Trava a interface
+            self._is_rendering_plots = True
+            self._update_action_states()
+            
+            # Se veio do Fit, aproveita o progresso. Se veio de um clique do usuário, começa do 0.
+            base_prog = self.progress.value() if log_source == "(force)" else 0
+
             # --- 1. GERAÇÃO DA EQUAÇÃO DE REGRESSÃO ---
+            self.lbl_status.setText("Extraindo equações matemáticas...")
+            self.progress.setValue(base_prog + 5)
+            QApplication.processEvents()
+            
             try:
                 res = self.model.modelos[idx]
                 params = res.params
@@ -1185,7 +1302,6 @@ class MainWindow(QMainWindow):
                         sinal = " + " if val >= 0 else " - "
                         equacao += f"{sinal}{abs(val):.6f} * {x_form}"
                 
-                # --- GERAÇÃO DAS EQUAÇÕES (Regressão e Estimativa) ---
                 eq_reg, eq_est = self._get_equacoes_texto(idx)
                 
                 self.log_sep("EQUAÇÃO DE REGRESSÃO (Espaço Estatístico)")
@@ -1193,14 +1309,14 @@ class MainWindow(QMainWindow):
                 self.log_sep("EQUAÇÃO ESTIMATIVA (Espaço de Valor)")
                 self.log(eq_est)
                 self.log_sep()
-                
             except Exception as e_eq:
                 self.log(f"Aviso: Falha na equação: {e_eq}")
 
             # --- 2. GERAÇÃO DO RESUMO (SUMMARY) AUTOMÁTICO ---
+            self.lbl_status.setText("Calculando sumário estatístico...")
+            self.progress.setValue(base_prog + 10)
+            QApplication.processEvents()
             try:
-                # Chamamos o método resumo do modelo diretamente
-                # O parâmetro usar_limpo define se usamos a amostra com ou sem outliers
                 summary_text = self.model.resumo(usar_limpo=self.usar_limpo())
                 if summary_text:
                     self.log(summary_text)
@@ -1209,17 +1325,26 @@ class MainWindow(QMainWindow):
                 self.log(f"Aviso: Falha ao gerar o resumo estatístico: {e_sum}")
             
             # --- 3. BATERIA DE TESTES AUTOMÁTICOS EM SEQUÊNCIA ---
-            self.run_shapiro()
-            self.run_kstest()
-            self.run_bp()
-            self.run_dw()
-            self.run_vif()
-            self.run_enquadramento()
+            self.lbl_status.setText("Executando bateria de testes...")
+            self.progress.setValue(base_prog + 15)
+            QApplication.processEvents()
+            
+            # self.run_shapiro()
+            # self.run_kstest()
+            # self.run_bp()
+            # self.run_dw()
+            # self.run_vif()
+            # self.run_enquadramento()
+            
+            # --- 4. PREPARAR PAINÉIS VISUAIS ---
+            self.lbl_status.setText("Atualizando dashboard...")
+            self.progress.setValue(base_prog + 20)
+            QApplication.processEvents()
             
             self._update_action_states()
-            self._refresh_plot_panels()
             self._update_dashboard()
-
+            self._refresh_plot_panels() # Isso inicia o loop final dos gráficos
+            
         except Exception as e:
             self.log_action("Selecionar modelo")
             self.log(f"Erro ao selecionar modelo {idx}: {e}")
@@ -1331,7 +1456,38 @@ class MainWindow(QMainWindow):
             self.log(f"Falha ao cancelar: {e}")
 
         self._update_action_states()
-
+    
+    def open_settings(self):
+        self.log_action("Configurações")
+        
+        # Como o SettingsDialog não estava definido no arquivo original, 
+        # ele já deve estar criado aí no seu código, chamamos ele normalmente:
+        dlg = SettingsDialog(self, self.config)
+        
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            novas_configs = dlg.get_config()
+            self.config.update(novas_configs)
+            self.log(f"Novas configurações salvas: {self.config}")
+            
+            # 1. Repassa as configurações para o núcleo matemático ativo
+            if self.model:
+                try:
+                    self.model.outliers_lim = float(self.config['outliers_lim'])
+                    # Se tiver outras variáveis no futuro que o modelo use na hora, atualize aqui
+                except Exception as e:
+                    self.log(f"Aviso ao atualizar limite no modelo ativo: {e}")
+                    
+            # 2. Atualiza APENAS a parte visual (Cards e Gráficos), 
+            # pulando a trava de segurança do _apply_model_idx
+            if self.model and self._current_idx() is not None:
+                self.log("Aplicando novas configurações na interface (Cards e Gráficos)...")
+                
+                # Atualiza os Cards imediatamente (o Card de Outliers vai de 1 para 0)
+                self._update_dashboard()
+                
+                # Inicia a fila de regeração dos gráficos nos painéis
+                self._refresh_plot_panels()
+    
     # ============================================================
     # Leitura de arquivos (CSV/TXT/TSV + Excel/ODS)
     # ============================================================
@@ -1563,77 +1719,6 @@ class MainWindow(QMainWindow):
             self._apply_preco(dlg.selected())
 
     # ============================================================
-    # LIMPAR OUTLIERS (menu) — agora BLOQUEANTE
-    # ============================================================
-    def menu_limpar_outliers(self):
-        self.log_action("Limpar outliers")
-
-        if not self.model:
-            self.log("Nenhum modelo ajustado.")
-            return
-
-        fn = getattr(self.model, "outliers_exc", None)
-        if fn is None or not callable(fn):
-            self.log("Método outliers_exc() não disponível.")
-            return
-
-        dlg = CleanOutliersDialog(self, r2_alvo=float(self.R2_alvo), lim_sigma=float(self.outliers_lim))
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        r2_alvo, lim_sigma = dlg.values()
-        self.R2_alvo = float(r2_alvo)
-        self.outliers_lim = float(lim_sigma)
-
-        try:
-            setattr(self.model, "outliers_lim", float(self.outliers_lim))
-        except Exception as e:
-            self.log(f"Aviso: não consegui definir outliers_lim no modelo: {e}")
-
-        self.log(f"Parâmetros: R2_alvo={self.R2_alvo:.3f} | outliers_lim={self.outliers_lim:.0f}σ")
-
-        idx_at_start = self._current_idx()
-
-        def after_outliers(_result):
-            ok_same_idx = (
-                self._current_idx() is not None and
-                idx_at_start is not None and
-                int(self._current_idx()) == int(idx_at_start)
-            )
-            has_clean = bool(
-                ok_same_idx and
-                self.model is not None and
-                getattr(self.model, "amostra_limpa", None) is not None and
-                getattr(self.model, "modelo_limpo", None) is not None
-            )
-
-            self._limpo_ready = bool(has_clean)
-            self._limpo_ready_idx = int(idx_at_start) if has_clean else None
-
-            # não marca automaticamente; só habilita o item
-            self._usar_limpo_flag = False
-            try:
-                self.act_use_clean.blockSignals(True)
-                self.act_use_clean.setChecked(False)
-            finally:
-                self.act_use_clean.blockSignals(False)
-
-            self._update_action_states()
-            if self.model is not None and self._current_idx() is not None:
-                self._refresh_plot_panels()
-
-        th = start_worker(
-            fn,
-            self.log,
-            self.progress_slot,
-            kwargs={"R2_alvo": float(self.R2_alvo)},
-            callback=after_outliers,
-            owner=self
-        )
-        self.threads.append(th)
-        self._register_blocking_thread(th)
-
-    # ============================================================
     # CALLBACK: pós-fit
     # ============================================================
     def _after_fit(self, _result):
@@ -1641,8 +1726,7 @@ class MainWindow(QMainWindow):
         if th is not None:
             try:
                 if th.isInterruptionRequested():
-                    self.log_action("Pós-fit")
-                    self.log("Fit cancelado.")
+                    self._finish_fit_ui("Fit cancelado.")
                     self._update_action_states()
                     return
             except Exception:
@@ -1653,29 +1737,36 @@ class MainWindow(QMainWindow):
         self._limpo_ready_idx = None
 
         try:
+            from PyQt6.QtWidgets import QApplication
             self.tabs.setCurrentWidget(self.log_box)
-            self.resultados() # Preenche a tabela em thread separada
 
             n = self._num_modelos()
             if n <= 0:
                 self.log("Fit concluído, mas não há modelos disponíveis.")
-                self._update_action_states()
+                self._finish_fit_ui("Nenhum modelo gerado.")
                 return
 
             best_idx = self._current_idx() if self._current_idx() is not None else 0
             best_idx = max(0, min(int(best_idx), n - 1))
 
-            # Este método já chama o Dashboard e os Gráficos internamente
-            self._apply_model_idx(best_idx, log_source="(force)")
+            # =========================================================
+            # ORQUESTRANDO O PROGRESSO PÓS-FIT
+            # =========================================================
+            self.progress.setValue(50)
+            self.lbl_status.setText("Montando Tabela de Resultados...")
+            QApplication.processEvents() # Força a tela a atualizar AGORA
 
-            self.lbl_status.setText(f"Concluído (Melhor modelo: {best_idx})")
-            self.progress.setValue(100)
+            # Fase 1: Dispara a Tabela Grande
+            self._is_building_table = True
+            self.resultados() 
+
+            # Fase 2: Dispara a UI do Modelo (Textos, Testes e Gráficos)
+            # O _apply_model_idx cuidará de levar o progresso de 50% a 100%
+            self._apply_model_idx(best_idx, log_source="(force)")
 
         except Exception as e:
             self.log(f"Erro no processamento pós-fit: {e}")
-
-        self._update_action_states()
-        # REMOVIDA a chamada redundante de refresh_plot_panels que estava aqui
+            self._finish_fit_ui("Erro pós-fit.")
 
     # ============================================================
     # FIT — agora BLOQUEANTE
@@ -1724,7 +1815,7 @@ class MainWindow(QMainWindow):
                 preco=self.preco,
                 gui_log=self.log,
                 gui_progress=self.progress_slot,
-                outliers_lim=float(self.outliers_lim),
+                outliers_lim=float(self.config['outliers_lim']), # <- AQUI
             )
         except Exception as e:
             self.model = None
@@ -1768,7 +1859,7 @@ class MainWindow(QMainWindow):
                     self.log,
                     self.progress_slot,
                     callback=self._show_table_df,
-                    kwargs={"qtd": 500},
+                    kwargs={"qtd": int(self.config.get('max_modelos_tabela', 500))},
                     owner=self
                 )
             )
@@ -1940,9 +2031,21 @@ class MainWindow(QMainWindow):
     # TABELA
     # ============================================================
     def _show_table_df(self, df: pd.DataFrame):
+        from PyQt6.QtCore import Qt
+        
+        # Guarda a tabela para poder ser salva no projeto (passo anterior)
+        self._last_df_tabela = df  
+        
         if df is None or df.empty:
             self.log("Tabela vazia.")
             return
+
+        # ==========================================================
+        # O SEGREDO DA VELOCIDADE: Desligar atualizações visuais e ordenação!
+        # ==========================================================
+        self.table.setSortingEnabled(False)
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
 
         self.table.setRowCount(len(df))
         self.table.setColumnCount(len(df.columns))
@@ -1950,9 +2053,29 @@ class MainWindow(QMainWindow):
 
         for r in range(len(df)):
             for c in range(len(df.columns)):
-                self.table.setItem(r, c, QTableWidgetItem(str(df.iat[r, c])))
+                val = df.iat[r, c]
+                item = QTableWidgetItem()
+                
+                # Usar EditRole em vez de string faz o PyQt ordenar números corretamente
+                if isinstance(val, (int, float)):
+                    # Arredonda levemente a visualização se for float para ficar limpo
+                    item.setData(Qt.ItemDataRole.EditRole, round(float(val), 6))
+                else:
+                    item.setData(Qt.ItemDataRole.EditRole, str(val))
+                    
+                self.table.setItem(r, c, item)
 
         self.table.resizeColumnsToContents()
+
+        # ==========================================================
+        # RELIGAR TUDO APÓS O PREENCHIMENTO ESTAR COMPLETO
+        # ==========================================================
+        self.table.setSortingEnabled(True)
+        self.table.setUpdatesEnabled(True)
+        self.table.blockSignals(False)
+        
+        self._is_building_table = False
+        self._update_action_states()
 
     def run_predicao(self):
         if not self.model or self._current_idx() is None:
@@ -2412,6 +2535,22 @@ class MainWindow(QMainWindow):
         self.btn_pdf_tool.triggered.connect(self.exportar_laudo_pdf)
         self.btn_pdf_tool.setToolTip("Exportar Laudo Completo em PDF (Ctrl+Shift+E)")
         
+        # CONFIGURAÇÕES (NOVO BOTÃO NO FIM DA BARRA)
+        toolbar.addSeparator()
+        
+        # Tenta carregar uma engrenagem personalizada (basta ter um arquivo 'gear.png' na pasta)
+        import os
+        from PyQt6.QtGui import QIcon
+        
+        if os.path.exists("gear.png"):
+            icon_settings = QIcon("gear.png")
+        else:
+            # Ícone "estepe" nativo enquanto você não baixa um PNG de engrenagem
+            icon_settings = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self.btn_settings_tool = toolbar.addAction(icon_settings, "Configurações")
+        self.btn_settings_tool.triggered.connect(self.open_settings)
+        self.btn_settings_tool.setToolTip("Abrir painel de configurações (Ctrl+P)")
+        
         # Adicionamos as referências à lista de ações para desabilitar durante o Fit
         # (Isso garante que o usuário não clique em calcular enquanto já está calculando)
         self._toolbar_actions = [
@@ -2419,7 +2558,8 @@ class MainWindow(QMainWindow):
             self.btn_dep_tool,
             self.btn_calc_tool, 
             self.btn_clean_tool,
-            self.btn_pdf_tool
+            self.btn_pdf_tool,
+            self.btn_settings_tool
         ]
         
     def _handle_calc_action(self):
@@ -2521,22 +2661,31 @@ class MainWindow(QMainWindow):
     def run_outliers_exc(self):
         """Inicia o processo de exclusão iterativa de outliers via Thread."""
         if not self.model:
+            self.log("Nenhum modelo ajustado para limpar.")
             return
 
-        self.log_action("Limpar Outliers (Iterativo)")
+        self.log_action("Limpar Outliers (Automático)")
+        
+        # 1. Garante que o modelo está usando o limite de desvios atualizado nas Configurações
+        try:
+            self.model.outliers_lim = float(self.config['outliers_lim'])
+        except Exception as e:
+            self.log(f"Aviso ao definir outliers_lim no modelo: {e}")
+
+        # 2. Informa ao usuário os parâmetros que estão sendo usados (baseado nas configurações)
+        self.log(f"Parâmetros ativos: R² Alvo = {self.config['r2_alvo']} | Limite = {self.config['outliers_lim']}σ | Máx Remoção = {self.config['max_outliers_pct']*100}%")
         self.lbl_status.setText("Saneando amostra...")
         
-        # Usamos o padrão de worker que você já possui no projeto
-        # Passamos o R2_alvo (ex: 0.75) que você definiu no __init__
+        # 3. Dispara a Thread de limpeza
         th = start_worker(
             self.model.outliers_exc,
             self.log,
             self.progress_slot,
             callback=self._on_outliers_finished,
             kwargs={
-                "R2_alvo": self.R2_alvo, 
-                "out_lim": 0.2,   # Limite máximo de 20% da amostra
-                "conv_lim": 0.5   # Critério de convergência
+                "R2_alvo": self.config['r2_alvo'], 
+                "out_lim": self.config['max_outliers_pct'],   
+                "conv_lim": self.config.get('conv_lim', 0.5)  
             },
             owner=self
         )
@@ -2550,28 +2699,24 @@ class MainWindow(QMainWindow):
             self._update_action_states() # Garante reabilitação mesmo em falha
             return
 
-        # Desempacota o retorno do model.py
-        amostra_limpa, modelo_limpo, amostra_limpa_orig, removidos = result
+        # Desempacota o retorno NOVO do model.py (agora com 5 variáveis)
+        amostra_limpa, modelo_limpo, amostra_limpa_orig, linhas_removidas, resolvidos = result
 
-        self.log(f"Saneamento concluído. Outliers removidos: {removidos}")
-        self.lbl_status.setText(f"Concluído: {removidos} removidos.")
+        # Log inteligente detalhando o fenômeno matemático
+        self.log(f"Saneamento concluído. {linhas_removidas} linha(s) removida(s) resolveram {resolvidos} outlier(s).")
+        self.lbl_status.setText(f"Concluído: {linhas_removidas} linhas removidas.")
 
-        # Marca que o modelo 'limpo' está pronto para ser usado nos gráficos/dashboard
         self._limpo_ready = True
         self._limpo_ready_idx = self._current_idx()
         
-        # Forçamos o uso da versão limpa agora que ela foi gerada
         self._usar_limpo_flag = True
         if hasattr(self, 'act_use_clean'):
             self.act_use_clean.setChecked(True)
 
-        # Atualiza tudo para refletir a melhora no modelo
         self._update_dashboard()
         self._refresh_plot_panels()
         
-        # Se quiser ver a nova equação e summary do modelo limpo:
         self._apply_model_idx(self._current_idx(), log_source="(modelo saneado)")
-        
         self._update_action_states()
 
     def _on_chk_outliers_toggled(self, checked: bool):
@@ -2810,7 +2955,14 @@ class MainWindow(QMainWindow):
                 extra = {}
                 if hasattr(self, 'df_avaliandos') and self.df_avaliandos is not None:
                     extra['avaliandos'] = self.df_avaliandos
-
+                
+                # ==========================================================
+                # NOVO: Salvar também a Tabela de Resultados já processada!
+                if hasattr(self, '_last_df_tabela') and self._last_df_tabela is not None:
+                    extra['tabela_resultados'] = self._last_df_tabela
+                extra['config'] = self.config # <- SALVA AQUI
+                # ==========================================================
+                
                 self.model.salvar_projeto(path, extra_data=extra)
                 self.log(f"💾 Projeto salvo com sucesso em:\n{path}")
             except Exception as e:
@@ -2882,6 +3034,10 @@ class MainWindow(QMainWindow):
             self.df = self.model.amostras[0] 
             self.preco = self.model.preco
             
+            # Restaura as configurações, se existirem no projeto salvo
+            if self.model.extra_data and 'config' in self.model.extra_data:
+                self.config.update(self.model.extra_data['config'])
+            
             # Puxa a variável guardada no iniciar do processo
             self.csv_path = getattr(self, "_caminho_projeto_carregando", "projeto.mqo")
             self.lbl_arquivo.setText(f"Arquivo: {os.path.basename(self.csv_path)}")
@@ -2915,8 +3071,12 @@ class MainWindow(QMainWindow):
                 self.model._modelo_idx = None # Truque para engatilhar redesenho completo
                 self._apply_model_idx(idx_salvo, log_source="(Projeto Carregado)")
 
-            # 8. Refaz a Tabela Grande
-            self.resultados()
+            # 8. Restaura a Tabela Grande sem recalcular!
+            if self.model.extra_data and 'tabela_resultados' in self.model.extra_data:
+                self.log("A restaurar a Tabela (Resultados) guardada...")
+                self._show_table_df(self.model.extra_data['tabela_resultados'])
+            else:
+                self.resultados() # Só calcula se for um ficheiro mqo antigo
             
             self.lbl_status.setText("Projeto carregado com sucesso.")
             self.progress.setValue(100)
