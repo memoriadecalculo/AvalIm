@@ -2182,6 +2182,9 @@ class MainWindow(QMainWindow):
             import os
             import platform
             import subprocess
+            import numpy as np
+            import pandas as pd
+            import re
 
             def abrir_documento(caminho):
                 sistema = platform.system()
@@ -2192,15 +2195,73 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     self.log(f"Laudo salvo, mas erro ao abrir: {e}")
 
-            # Preparar dados
+            # Preparar dados do Modelo e NBR
             usar_limpo = self.usar_limpo()
             info_nbr = self.model.enquadramento_nbr(
                 usar_limpo=usar_limpo, 
                 amplitude_percentual=getattr(self, "_ultima_amplitude", None)
             )
             graus = ["Inidôneo", "I", "II", "III"]
+            
+            # Identificar modelo ativo para extrair variáveis e outliers
+            if usar_limpo and getattr(self.model, 'modelo_limpo', None) is not None:
+                modelo_ativo = self.model.modelo_limpo
+                amostra_ativa = self.model.amostra_limpa
+            else:
+                modelo_ativo = self.model.modelo
+                amostra_ativa = self.model.amostra
+                
+            var_dep = self.model.preco
+            vars_indep = [col for col in amostra_ativa.columns if col != var_dep]
+            vars_str = ", ".join(vars_indep)
+            n_vars = len(vars_indep)
+            
+            # Cálculo de Outliers Atuais
+            influ = modelo_ativo.get_influence()
+            resid = influ.resid_studentized_internal
+            limite_outliers = float(self.config.get('outliers_lim', 2.0)) if hasattr(self, 'config') else 2.0
+            qtd_outliers = int(np.sum(np.abs(resid) > limite_outliers))
 
-            # 3. Gerar gráficos
+            # ==========================================================
+            # CAPTURA SILENCIOSA DOS TESTES (HOOK NO LOG DO FRAMEWORK)
+            # ==========================================================
+            old_log = self.model.gui_log
+            old_gui_mode = self.model.gui_mode
+            self.model.gui_mode = True # Força o modo de captura
+            
+            # Capturar Dist. Resíduos
+            buffer_residuos = []
+            def log_residuos(msg): buffer_residuos.append(re.sub(r'\033\[[0-9;]*m', '', str(msg))) # Limpa as cores ANSI
+            self.model.gui_log = log_residuos
+            try:
+                self.model.distribuicao_residuos(usar_limpo=usar_limpo)
+            except Exception as e:
+                buffer_residuos.append(f"Erro na dist. de resíduos: {e}")
+            txt_dist_residuos = "\n".join(buffer_residuos)
+
+            # Capturar os 5 Testes Estatísticos
+            buffer_testes = []
+            def log_testes(msg):
+                # Se for o DataFrame do VIF, imprime como tabela de texto
+                if isinstance(msg, pd.DataFrame): buffer_testes.append(msg.to_string())
+                else: buffer_testes.append(re.sub(r'\033\[[0-9;]*m', '', str(msg)))
+            
+            self.model.gui_log = log_testes
+            try:
+                self.model.teste_shapiro(usar_limpo=usar_limpo)
+                self.model.teste_kstest(usar_limpo=usar_limpo)
+                self.model.heterocedasticidade(usar_limpo=usar_limpo)
+                self.model.autocorrelacao(usar_limpo=usar_limpo)
+                self.model.multicolinearidade(usar_limpo=usar_limpo)
+            except Exception as e:
+                buffer_testes.append(f"Erro nos testes: {e}")
+            txt_testes = "\n".join(buffer_testes)
+
+            # Restaurar estado original do framework
+            self.model.gui_log = old_log
+            self.model.gui_mode = old_gui_mode
+
+            # 3. Gerar gráficos em pasta temporária
             with tempfile.TemporaryDirectory() as tmpdir:
                 self.lbl_status.setText("Gerando gráficos...")
                 graficos_paths = self.model.salvar_todos_graficos(tmpdir, usar_limpo=usar_limpo)
@@ -2208,89 +2269,145 @@ class MainWindow(QMainWindow):
                 # 4. Construir o PDF
                 pdf = FPDF()
                 
-                # --- REGISTRO ROBUSTO DE FONTES UNICODE ---
-                font_name = 'DejaVu'
+                # --- REGISTRO DE FONTE UNICODE (OBRIGATÓRIO PARA MATEMÁTICA) ---
+                font_name = 'DejaVuMono'
                 try:
-                    # REGULAR
-                    pdf.add_font(font_name, '', 'DejaVuSans.ttf')
-                    
-                    # NEGRITO (Mapeia para o arquivo Bold ou volta para o Regular se não existir)
-                    if os.path.exists('DejaVuSans-Bold.ttf'):
-                        pdf.add_font(font_name, 'B', 'DejaVuSans-Bold.ttf')
-                    else:
-                        pdf.add_font(font_name, 'B', 'DejaVuSans.ttf')
-                        
-                    # ITÁLICO (Mapeia para o arquivo Oblique ou volta para o Regular se não existir)
-                    if os.path.exists('DejaVuSans-Oblique.ttf'):
-                        pdf.add_font(font_name, 'I', 'DejaVuSans-Oblique.ttf')
-                    else:
-                        pdf.add_font(font_name, 'I', 'DejaVuSans.ttf')
-                        
+                    pdf.add_font(font_name, '', 'DejaVuSansMono.ttf')
+                    if os.path.exists('DejaVuSansMono-Bold.ttf'): pdf.add_font(font_name, 'B', 'DejaVuSansMono-Bold.ttf')
+                    else: pdf.add_font(font_name, 'B', 'DejaVuSansMono.ttf')
+                    if os.path.exists('DejaVuSansMono-Oblique.ttf'): pdf.add_font(font_name, 'I', 'DejaVuSansMono-Oblique.ttf')
+                    else: pdf.add_font(font_name, 'I', 'DejaVuSansMono.ttf')
                 except Exception as e:
-                    self.log(f"Aviso: Falha ao carregar DejaVu ({e}). Usando fontes padrão.")
-                    font_name = 'Helvetica'
+                    self.log("Erro: Arquivo 'DejaVuSansMono.ttf' não encontrado na pasta.")
+                    QMessageBox.critical(
+                        self, "Fonte Ausente", 
+                        "Para imprimir equações (√, R²), o arquivo 'DejaVuSansMono.ttf' precisa estar na pasta."
+                    )
+                    return 
 
-                pdf.set_auto_page_break(auto=True, margin=15)
+                pdf.set_auto_page_break(auto=True, margin=10)
                 pdf.add_page()
                 
                 # Título Principal
                 pdf.set_font(font_name, "B", 18)
                 pdf.cell(0, 15, "RELATÓRIO DE AVALIAÇÃO IMOBILIÁRIA", ln=True, align="C")
-                
-                # Subtítulo (Aqui o estilo "I" agora está seguro!)
                 pdf.set_font(font_name, "I", 10)
                 pdf.cell(0, 5, "Gerado pelo Sistema AvalIm - MQO", ln=True, align="C")
                 pdf.ln(10)
 
-                # Seção 1: Identificação
+                # ===================================================================
+                # 1. INFORMAÇÕES DO MODELO
+                # ===================================================================
                 pdf.set_font(font_name, "B", 12)
                 pdf.set_fill_color(240, 240, 240)
-                pdf.cell(0, 10, " 1. INFORMAÇÕES DO MODELO", ln=True, fill=True)
+                pdf.cell(0, 10, " 1. INFORMAÇÕES", ln=True, fill=True)
                 pdf.set_font(font_name, "", 10)
                 pdf.ln(2)
-                pdf.cell(0, 7, f"Arquivo: {os.path.basename(self.csv_path)}", ln=True)
-                pdf.cell(0, 7, f"Variável Dependente (Y): {self.model.preco}", ln=True)
-                pdf.cell(0, 7, f"Amostra: {info_nbr['n']} dados | Variáveis: {info_nbr['k']}", ln=True)
+                
+                arquivo_nome = os.path.basename(self.csv_path) if hasattr(self, 'csv_path') and self.csv_path else "Não informado"
+                pdf.cell(0, 7, f"Arquivo: {arquivo_nome}", ln=True)
+                pdf.cell(0, 7, f"Variável Dependente (Y): {var_dep}", ln=True)
+                pdf.cell(0, 7, f"Tamanho da Amostra: {info_nbr['n']} dados", ln=True)
+                pdf.multi_cell(0, 7, f"Variáveis Independentes: {n_vars} ({vars_str})")
                 pdf.ln(5)
 
-                # Seção 2: NBR 14653
+                # ===================================================================
+                # 2. EQUAÇÕES DO MODELO
+                # ===================================================================
                 pdf.set_font(font_name, "B", 12)
-                pdf.cell(0, 10, " 2. ENQUADRAMENTO (FUNDAMENTAÇÃO E PRECISÃO)", ln=True, fill=True)
+                pdf.cell(0, 10, " 2. EQUAÇÕES", ln=True, fill=True)
+                pdf.set_font(font_name, "", 9)
+                eq_reg, eq_est = self._get_equacoes_texto(self._current_idx())
+                pdf.ln(2)
+                pdf.set_text_color(100, 100, 100)
+                pdf.multi_cell(0, 5, f"Regressão: {eq_reg}")
+                pdf.ln(2)
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_font(font_name, "B", 10)
+                pdf.multi_cell(0, 5, f"Estimativa: {eq_est}")
+                pdf.set_font(font_name, "", 10)
+                pdf.ln(5)
+
+                # ===================================================================
+                # 3. RESULTADOS ESTATÍSTICOS (Summary, Outliers e Dist. Resíduos)
+                # ===================================================================
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 3. RESULTADOS ESTATÍSTICOS", ln=True, fill=True)
+                pdf.ln(2)
+                
+                pdf.set_font(font_name, "", 8)
+                texto_resumo = self.model.resumo(usar_limpo=usar_limpo)
+                pdf.multi_cell(0, 4, texto_resumo)
+                pdf.ln(3)
+                
+                pdf.set_font(font_name, "B", 9)
+                pdf.cell(0, 6, f"Quantidade de Outliers Encontrados (Limite {limite_outliers}σ): {qtd_outliers}", ln=True)
+                
+                pdf.set_font(font_name, "", 8)
+                pdf.multi_cell(0, 4, txt_dist_residuos)
+                pdf.ln(5)
+
+                # ===================================================================
+                # 4. TESTES ESTATÍSTICOS
+                # ===================================================================
+                # pdf.add_page() # Quebra de página para não cortar os testes ao meio
+                pdf.add_page()
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 4. TESTES ESTATÍSTICOS", ln=True, fill=True)
+                pdf.ln(2)
+                
+                pdf.set_font(font_name, "", 8)
+                pdf.multi_cell(0, 4, txt_testes)
+                pdf.ln(5)
+
+                # ===================================================================
+                # 5. FUNDAMENTAÇÃO E PRECISÃO E AVALIANDOS
+                # ===================================================================
+                pdf.add_page()
+                pdf.set_font(font_name, "B", 12)
+                pdf.cell(0, 10, " 5. ENQUADRAMENTO (FUNDAMENTAÇÃO E PRECISÃO) E VALORES", ln=True, fill=True)
                 pdf.set_font(font_name, "", 10)
                 pdf.ln(2)
+                
                 pdf.cell(0, 7, f"- Grau de Fundamentação: {graus[info_nbr['fundamentacao']]}", ln=True)
                 if "precisao" in info_nbr:
                     pdf.cell(0, 7, f"- Grau de Precisão: {graus[info_nbr['precisao']]} ({info_nbr['amplitude']:.2f}%)", ln=True)
                 pdf.ln(5)
+                
+                if hasattr(self, 'table_avaliandos') and self.table_avaliandos.rowCount() > 0:
+                    pdf.set_font(font_name, 'B', 10)
+                    pdf.cell(0, 8, "Resultados das Previsões (Avaliandos):", ln=True)
+                    
+                    pdf.set_font(font_name, '', 8)
+                    col_count = self.table_avaliandos.columnCount()
+                    row_count = self.table_avaliandos.rowCount()
+                    col_width = 190 / max(col_count, 1) 
+                    
+                    pdf.set_font(font_name, 'B', 8)
+                    for c in range(col_count):
+                        header_item = self.table_avaliandos.horizontalHeaderItem(c)
+                        txt_header = header_item.text() if header_item else f"Col{c}"
+                        pdf.cell(col_width, 6, txt_header[:15], border=1, align='C')
+                    pdf.ln()
+                    
+                    pdf.set_font(font_name, '', 8)
+                    for r in range(row_count):
+                        for c in range(col_count):
+                            item = self.table_avaliandos.item(r, c)
+                            txt_cell = item.text() if item else ""
+                            pdf.cell(col_width, 6, txt_cell[:15], border=1, align='C')
+                        pdf.ln()
+                else:
+                    pdf.set_font(font_name, 'I', 10)
+                    pdf.cell(0, 6, "Nenhum dado de Avaliandos foi calculado ou inserido.", ln=True)
+                pdf.ln(5)
 
-                # Seção 3: Sumário Estatístico
-                pdf.set_font(font_name, "B", 12)
-                pdf.cell(0, 10, " 3. RESULTADOS ESTATÍSTICOS (Summary)", ln=True, fill=True)
-                pdf.ln(2)
-                pdf.set_font(font_name, "", 8)
-                texto_resumo = self.model.resumo(usar_limpo=usar_limpo)
-                pdf.multi_cell(0, 4, texto_resumo)
-                pdf.ln(5)
-                
-                # Seção 4: Equações (√ e ² agora permitidos)
-                pdf.set_font(font_name, "B", 12)
-                pdf.cell(0, 10, " 4. EQUAÇÕES DO MODELO", ln=True, fill=True)
-                pdf.set_font(font_name, "", 9)
-                eq_reg, eq_est = self._get_equacoes_texto(self._current_idx())
-                pdf.ln(2)
-                pdf.set_text_color(100, 100, 100) # Regressão em cinza
-                pdf.multi_cell(0, 5, f"Regressão: {eq_reg}")
-                pdf.ln(2)
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_font(font_name, "B", 10) # Estimativa em negrito
-                pdf.multi_cell(0, 5, f"Estimativa: {eq_est}")
-                pdf.set_text_color(0, 0, 0)
-                pdf.ln(5)
-                
-                # Seção 5: Gráficos
+                # ===================================================================
+                # 6. GRÁFICOS
+                # ===================================================================
                 pdf.add_page()
                 pdf.set_font(font_name, "B", 14)
-                pdf.cell(0, 10, "5. ANEXOS GRÁFICOS", ln=True, align="C")
+                pdf.cell(0, 10, "6. ANEXOS GRÁFICOS", ln=True, align="C")
                 pdf.ln(5)
 
                 y_pos = 30
@@ -2303,14 +2420,15 @@ class MainWindow(QMainWindow):
                     pdf.image(g_path, x=15, y=y_pos + 10, w=180)
                     y_pos += 125
 
+                # Finalizar arquivo
                 pdf.output(path)
                 self.lbl_status.setText(f"Laudo exportado com sucesso!")
-                QMessageBox.information(self, "Sucesso", "O laudo PDF foi gerado!")
+                QMessageBox.information(self, "Sucesso", "O laudo PDF foi gerado com sucesso!")
                 abrir_documento(path)
 
         except Exception as e:
             self.log(f"Erro na exportação: {e}")
-            QMessageBox.critical(self, "Erro", f"Falha na exportação: {e}")
+            QMessageBox.critical(self, "Erro", f"Falha na exportação:\n{e}")
 
     def _fill_table_from_df(self, table_widget: QTableWidget, df: pd.DataFrame):
         if df is None:
