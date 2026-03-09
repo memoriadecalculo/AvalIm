@@ -146,6 +146,11 @@ class MQO:
         self.amostra_limpa_orig = None
         self.modelo_limpo = None
 
+    def fmt_num(self, valor, decimais=4):
+        """Formata número para o padrão brasileiro (ex: 1.234,56)."""
+        txt = f"{float(valor):,.{decimais}f}"
+        return txt.replace(',', 'X').replace('.', ',').replace('X', '.')
+    
     # ============================================================
     # HELPERS
     # ============================================================
@@ -337,8 +342,13 @@ class MQO:
     # ============================================================
     # Imprimir transformação
     # ============================================================
-    def transformada_print(self, n: int, varname=None):
-        base_symbol = "y" if varname == self.preco else "x"
+    def transformada_print(self, n: int, varname=None, usar_nome=False):
+        # Se for para usar o nome e a variável existir, usa o próprio nome. Senão, recai no x ou y.
+        if usar_nome and varname:
+            base_symbol = str(varname)
+        else:
+            base_symbol = "y" if varname == self.preco else "x"
+            
         ops = {
             0: f"{base_symbol}",
             1: f"1/{base_symbol}",
@@ -727,10 +737,18 @@ class MQO:
 
         matrix_corr = amostra_ref.corr()
 
+        # Cria uma matriz de textos já com a vírgula para o Seaborn usar
+        annot_labels = np.empty_like(matrix_corr, dtype=object)
+        for i in range(matrix_corr.shape[0]):
+            for j in range(matrix_corr.shape[1]):
+                annot_labels[i, j] = self.fmt_num(matrix_corr.iloc[i, j], 2)
+
         import seaborn as sns
         fig = Figure(figsize=(6, 4))
         ax = fig.add_subplot(1, 1, 1)
-        sns.heatmap(matrix_corr, annot=True, cmap="coolwarm", fmt=".2f", linewidths=.5, ax=ax)
+        
+        # Alterado: passamos annot_labels e fmt=""
+        sns.heatmap(matrix_corr, annot=annot_labels, fmt="", cmap="coolwarm", linewidths=.5, ax=ax)
         ax.set_title("Matriz de Correlação" + (" (Limpa)" if usar_limpo else ""))
 
         fig.tight_layout()
@@ -791,9 +809,9 @@ class MQO:
 
         self._log("\nTeste de Normalidade - Shapiro-Wilk")
         self._log("-------------------------------------------")
-        self._log(f"Statistic : {stat:.6f}")
-        self._log(f"P-value   : {pvalue:.6f}")
-        self._log(f"Significância adotada: {significancia:.3f}")
+        self._log(f"Statistic : {self.fmt_num(stat, 6)}")
+        self._log(f"P-value   : {self.fmt_num(pvalue, 6)}")
+        self._log(f"Significância adotada: {self.fmt_num(significancia, 3)}")
         self._log("-------------------------------------------")
         self._log("Interpretação estatística:")
         self._log(" - Hipótese nula: resíduos seguem distribuição normal")
@@ -826,9 +844,9 @@ class MQO:
 
         self._log("\nTeste de Normalidade - Kolmogorov-Smirnov")
         self._log("-------------------------------------------")
-        self._log(f"Statistic : {stat:.6f}")
-        self._log(f"P-value   : {pvalue:.6f}")
-        self._log(f"Significância adotada: {significancia:.3f}")
+        self._log(f"Statistic : {self.fmt_num(stat, 6)}")
+        self._log(f"P-value   : {self.fmt_num(pvalue, 6)}")
+        self._log(f"Significância adotada: {self.fmt_num(significancia, 3)}")
         self._log("-------------------------------------------")
 
         if pvalue > significancia:
@@ -883,9 +901,9 @@ class MQO:
 
         self._log("\nDistribuição dos Resíduos (comparação com a Normal):")
         self._log("------------------------------------------------------")
-        self._log(f"Faixa ±1.00σ  → Observado: {p1:6.3%} | Teórico ≈ 68%")
-        self._log(f"Faixa ±1.64σ  → Observado: {p164:6.3%} | Teórico ≈ 90%")
-        self._log(f"Faixa ±1.96σ  → Observado: {p196:6.3%} | Teórico ≈ 95%")
+        self._log(f"Faixa ±1.00σ  → Observado: {self.fmt_num(p1*100, 3)}% | Teórico ≈ 68%")
+        self._log(f"Faixa ±1.64σ  → Observado: {self.fmt_num(p164*100, 3)}% | Teórico ≈ 90%")
+        self._log(f"Faixa ±1.96σ  → Observado: {self.fmt_num(p196*100, 3)}% | Teórico ≈ 95%")
         self._log("------------------------------------------------------")
 
     def heterocedasticidade(self, usar_limpo=False):
@@ -900,7 +918,7 @@ class MQO:
         self._log("\nTeste de Heterocedasticidade - Breusch-Pagan")
         self._log("------------------------------------------------")
         for n, v in resultado.items():
-            self._log(f"{n:20s}: {v:.6f}")
+            self._log(f"{n:20s}: {self.fmt_num(v, 6)}")
         self._log("------------------------------------------------")
 
         lm_pvalue = resultado['LM p-value']
@@ -929,7 +947,7 @@ class MQO:
 
         self._log("\nTeste de Autocorrelação - Durbin-Watson")
         self._log("-------------------------------------------")
-        self._log(f"Durbin-Watson: {dw:.4f}")
+        self._log(f"Durbin-Watson: {self.fmt_num(dw, 4)}")
         self._log("-------------------------------------------")
 
         if 1.5 <= dw <= 2.5:
@@ -966,9 +984,13 @@ class MQO:
 
         vif_sem_const = vif_df[vif_df["Variável"] != "const"]
 
+        # Formata a coluna VIF do DataFrame usando a nossa função
+        vif_df_formatado = vif_df.copy()
+        vif_df_formatado["VIF"] = vif_df_formatado["VIF"].apply(lambda x: self.fmt_num(x, 4))
+
         self._log("\nTeste de Multicolinearidade - VIF")
         self._log("-------------------------------------------")
-        self._log(vif_df)
+        self._log(vif_df_formatado.to_string(index=False)) # Imprime a tabela sem os índices (0, 1, 2...)
         self._log("-------------------------------------------")
 
         max_vif = vif_sem_const["VIF"].max()
@@ -1248,10 +1270,12 @@ class MQO:
         ax.stem(indices_ajustados, c, markerfmt=",", linefmt="C0-", basefmt="k-")
         
         # Linha 1: O limite de 4/n (Atenção)
-        ax.axhline(y=threshold_nbr, color='orange', linestyle='--', label=f'Atenção (4/n: {threshold_nbr:.2f})')
+        lbl_atencao = f"Atenção (4/n: {self.fmt_num(threshold_nbr, 2)})"
+        ax.axhline(y=threshold_nbr, color='orange', linestyle='--', label=lbl_atencao)
         
         # Linha 2: O limite de 1.0 (Crítico)
-        ax.axhline(y=threshold_classico, color='red', linestyle='--', linewidth=2, label='Crítico (1.0)')
+        lbl_critico = f"Crítico ({self.fmt_num(threshold_classico, 1)})"
+        ax.axhline(y=threshold_classico, color='red', linestyle='--', linewidth=2, label=lbl_critico)
         
         # AJUSTE 2: Etiquetar pontos influentes somando 1 ao índice
         # Onde c > threshold_nbr, pegamos o índice original (0-based) para acessar o array 'c'

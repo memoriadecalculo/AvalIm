@@ -27,6 +27,8 @@
 import os
 import pandas as pd
 import numpy as np
+import locale
+import matplotlib
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QVBoxLayout, QHBoxLayout,
@@ -45,6 +47,17 @@ from gui_plot_window import PlotWindow
 from gui_style import load_dark_style, load_light_style
 
 from model import MQO
+
+# ======================================================================
+# FORÇA O PYTHON E O MATPLOTLIB A USAREM O PADRÃO DO SISTEMA OPERACIONAL
+# ======================================================================
+try:
+    # Tenta definir a formatação numérica para o padrão do sistema (Brasil: vírgula decimal)
+    locale.setlocale(locale.LC_NUMERIC, '')
+    # Informa ao Matplotlib para usar essa configuração nos eixos dos gráficos
+    matplotlib.rcParams['axes.formatter.use_locale'] = True
+except Exception as e:
+    print(f"Aviso: Não foi possível definir o locale numérico automaticamente: {e}")
 
 class RankingSpinBox(QSpinBox):
     """SpinBox que navega no ranking R2 internamente usando valores negativos."""
@@ -430,6 +443,18 @@ class MetricCard(QFrame):
         self.lbl_value.setText(text)
         self.lbl_value.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
 
+class NumericItem(QTableWidgetItem):
+    """Garante que a tabela formate o número visualmente, mas ordene matematicamente."""
+    def __init__(self, val_num, val_str):
+        super().__init__(val_str)
+        self.val_num = float(val_num)
+        self.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+    def __lt__(self, other):
+        if hasattr(other, 'val_num'):
+            return self.val_num < other.val_num
+        return super().__lt__(other)
+
 # ============================================================
 # MainWindow
 # ============================================================
@@ -657,6 +682,33 @@ class MainWindow(QMainWindow):
 
         self._update_action_states()
 
+    def fmt_num(self, val, decimals=4):
+        """Formata o número garantindo os separadores de milhar e decimal do Sistema."""
+        from PyQt6.QtCore import QLocale
+        try:
+            loc = QLocale.system()
+            dec_sep = loc.decimalPoint()
+            
+            # Gera a formatação americana padrão com milhar (ex: 1,234,567.89)
+            txt = f"{float(val):,.{decimals}f}"
+            
+            # Se o sistema usar vírgula como decimal (Padrão BR), nós invertemos os símbolos
+            if dec_sep == ',':
+                txt = txt.replace(',', 'X').replace('.', ',').replace('X', '.')
+                
+            return txt
+        except (ValueError, TypeError):
+            return str(val)
+            
+    def fmt_summary(self, text):
+        """Substitui os pontos por vírgulas nos relatórios do Statsmodels de forma segura."""
+        from PyQt6.QtCore import QLocale
+        if QLocale.system().decimalPoint() == ',':
+            import re
+            # Substitui o ponto por vírgula APENAS se estiver entre dois números
+            text = re.sub(r'(\d)\.(\d)', r'\1,\2', str(text))
+        return text
+    
     def showEvent(self, event):
         super().showEvent(event)
         if self._split_sizes_applied:
@@ -1021,6 +1073,10 @@ class MainWindow(QMainWindow):
             self.log(ch * width)
 
     def log_action(self, title):
+        # Se já houver algum texto na tela, dá um "Enter" antes de desenhar o novo separador
+        if self.log_box.document().characterCount() > 1:
+            self.log("")
+            
         self.log_sep(title=title)
 
     def usar_limpo(self) -> bool:
@@ -1265,7 +1321,8 @@ class MainWindow(QMainWindow):
             self.log_box.clear() # Opcional: limpa o log para focar no novo modelo
             self.log_action("Selecionar modelo")
             self.log(f"Modelo selecionado: {idx} {log_source if log_source != '(force)' else ''}".rstrip())
-
+            self.log("")
+            
             from PyQt6.QtWidgets import QApplication
             
             # Trava a interface
@@ -1291,7 +1348,7 @@ class MainWindow(QMainWindow):
                 y_form = self.model.transformada_print(int(comb[y_idx]), y_name)
                 
                 b0 = params.get('const', 0)
-                equacao = f"{y_form} = {b0:.6f}"
+                equacao = f"{y_form} = {self.fmt_num(b0, 6)}"
                 
                 for i, col in enumerate(colunas):
                     if col == y_name: continue
@@ -1300,15 +1357,18 @@ class MainWindow(QMainWindow):
                         transf_idx = int(comb[i])
                         x_form = self.model.transformada_print(transf_idx, col)
                         sinal = " + " if val >= 0 else " - "
-                        equacao += f"{sinal}{abs(val):.6f} * {x_form}"
+                        equacao += f"{sinal}{self.fmt_num(abs(val), 6)} * {x_form}"
                 
                 eq_reg, eq_est = self._get_equacoes_texto(idx)
                 
                 self.log_sep("EQUAÇÃO DE REGRESSÃO (Espaço Estatístico)")
                 self.log(eq_reg)
+                self.log("")
                 self.log_sep("EQUAÇÃO ESTIMATIVA (Espaço de Valor)")
                 self.log(eq_est)
+                self.log("")
                 self.log_sep()
+                
             except Exception as e_eq:
                 self.log(f"Aviso: Falha na equação: {e_eq}")
 
@@ -1319,8 +1379,10 @@ class MainWindow(QMainWindow):
             try:
                 summary_text = self.model.resumo(usar_limpo=self.usar_limpo())
                 if summary_text:
-                    self.log(summary_text)
+                    # Aplica a máscara para formatar o quadro estatístico!
+                    self.log(self.fmt_summary(summary_text))
                     self.log_sep()
+                    self.log("")
             except Exception as e_sum:
                 self.log(f"Aviso: Falha ao gerar o resumo estatístico: {e_sum}")
             
@@ -2014,7 +2076,8 @@ class MainWindow(QMainWindow):
             if txt is None:
                 self.log("Resumo vazio.")
                 return
-            self.log(txt)
+            # Passa o texto do sumário pelo formatador inteligente que criamos
+            self.log(self.fmt_summary(txt))
 
         self.threads.append(
             start_worker(
@@ -2026,6 +2089,7 @@ class MainWindow(QMainWindow):
                 owner=self
             )
         )
+        self.log("")
 
     # ============================================================
     # TABELA
@@ -2054,15 +2118,10 @@ class MainWindow(QMainWindow):
         for r in range(len(df)):
             for c in range(len(df.columns)):
                 val = df.iat[r, c]
-                item = QTableWidgetItem()
-                
-                # Usar EditRole em vez de string faz o PyQt ordenar números corretamente
                 if isinstance(val, (int, float)):
-                    # Arredonda levemente a visualização se for float para ficar limpo
-                    item.setData(Qt.ItemDataRole.EditRole, round(float(val), 6))
+                    item = NumericItem(val, self.fmt_num(val, 6))
                 else:
-                    item.setData(Qt.ItemDataRole.EditRole, str(val))
-                    
+                    item = QTableWidgetItem(str(val))
                 self.table.setItem(r, c, item)
 
         self.table.resizeColumnsToContents()
@@ -2110,30 +2169,30 @@ class MainWindow(QMainWindow):
                 # Log de Resultados
                 self.log_action("Predição de Valor")
                 self.log(f"--- VALORES UNITÁRIOS ({self.model.preco}) ---")
-                self.log(f"Unitário Estimado: R$ {res['valor_pontual']:,.2f}")
-                self.log(f"I.C. Unitário: R$ {res['ic_inferior']:,.2f} a R$ {res['ic_superior']:,.2f}")
+                self.log(f"Unitário Estimado: R$ {self.fmt_num(res['valor_pontual'], 2)}")
+                self.log(f"I.C. Unitário: R$ {self.fmt_num(res['ic_inferior'], 2)} a R$ {self.fmt_num(res['ic_superior'], 2)}")
 
-                self.log(f"\n--- VALORES TOTAIS (x {col_multi}: {fator:,.2f}) ---")
+                self.log(f"\n--- VALORES TOTAIS (x {col_multi}: {self.fmt_num(fator, 2)}) ---")
                 val_total = res['valor_pontual'] * fator
                 ic_inf_total = res['ic_inferior'] * fator
                 ic_sup_total = res['ic_superior'] * fator
                 arb_inf_total = res['arbitrio_inferior'] * fator
                 arb_sup_total = res['arbitrio_superior'] * fator
 
-                self.log(f"VALOR TOTAL ESTIMADO: R$ {val_total:,.2f}")
-                self.log(f"I.C. Total: R$ {ic_inf_total:,.2f} a R$ {ic_sup_total:,.2f}")
-                self.log(f"Campo de Arbítrio Total (±15%): R$ {arb_inf_total:,.2f} a R$ {arb_sup_total:,.2f}")
+                self.log(f"VALOR TOTAL ESTIMADO: R$ {self.fmt_num(val_total, 2)}")
+                self.log(f"I.C. Total: R$ {self.fmt_num(ic_inf_total, 2)} a R$ {self.fmt_num(ic_sup_total, 2)}")
+                self.log(f"Campo de Arbítrio Total (±15%): R$ {self.fmt_num(arb_inf_total, 2)} a R$ {self.fmt_num(arb_sup_total, 2)}")
 
                 # Enquadramento de Precisão
                 info_p = self.model.enquadramento_nbr(usar_limpo=self.usar_limpo(), amplitude_percentual=amplitude)
                 graus = ["Inidôneo", "I", "II", "III"]
-                self.log(f"\nAmplitude: {amplitude*100:.2f}% (Grau de Precisão {graus[info_p['precisao']]})")
+                self.log(f"\nAmplitude: {self.fmt_num(amplitude*100, 2)}% (Grau de Precisão {graus[info_p['precisao']]})")
 
                 # Alerta Visual com Valor Total
                 QMessageBox.information(self, "Resultado Final", 
-                    f"VALOR TOTAL: R$ {val_total:,.2f}\n"
-                    f"Limite Inferior: R$ {ic_inf_total:,.2f}\n"
-                    f"Limite Superior: R$ {ic_sup_total:,.2f}\n"
+                    f"VALOR TOTAL: R$ {self.fmt_num(val_total, 2)}\n"
+                    f"Limite Inferior: R$ {self.fmt_num(ic_inf_total, 2)}\n"
+                    f"Limite Superior: R$ {self.fmt_num(ic_sup_total, 2)}\n"
                     f"Precisão: Grau {graus[info_p['precisao']]}")
                 
             except Exception as e:
@@ -2455,8 +2514,11 @@ class MainWindow(QMainWindow):
             # --- Preencher os dados das outras colunas ---
             for c in range(len(df.columns)):
                 val = df.iat[r, c]
-                text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
-                table_widget.setItem(r, c + 1, QTableWidgetItem(text))
+                if isinstance(val, (float, int)):
+                    item = NumericItem(val, self.fmt_num(val, 4))
+                else:
+                    item = QTableWidgetItem(str(val))
+                table_widget.setItem(r, c + 1, item)
         
         table_widget.blockSignals(False)
         table_widget.resizeColumnsToContents()
@@ -2507,13 +2569,15 @@ class MainWindow(QMainWindow):
         row = item.row()
         is_active = (item.checkState() == Qt.CheckState.Checked)
         
-        # Define a cor: Branco para ativo, Cinza para inativo
-        color = Qt.GlobalColor.white if is_active else Qt.GlobalColor.gray
-        
         for col in range(self.table_dados.columnCount()):
             cell = self.table_dados.item(row, col)
             if cell:
-                cell.setForeground(color)
+                if is_active:
+                    # Remove qualquer cor forçada, restaurando a cor original do tema
+                    cell.setData(Qt.ItemDataRole.ForegroundRole, None)
+                else:
+                    # Pinta de cinza quando a linha for desmarcada
+                    cell.setForeground(Qt.GlobalColor.gray)
 
     def resizeEvent(self, event):
         """Força os gráficos a terem 50% da altura da janela para garantir o scroll."""
@@ -2707,11 +2771,11 @@ class MainWindow(QMainWindow):
 
             # Métricas de Ajuste
             r2 = res.rsquared
-            self.card_r2.set_value(f"{r2:.4f}", "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336")
+            self.card_r2.set_value(self.fmt_num(r2, 4), "#4CAF50" if r2 >= 0.75 else "#FFC107" if r2 >= 0.50 else "#F44336")
             
             r2_adj = res.rsquared_adj
-            self.card_r2_adj.set_value(f"{r2_adj:.4f}", "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336")
-
+            self.card_r2_adj.set_value(self.fmt_num(r2_adj, 4), "#4CAF50" if r2_adj >= 0.75 else "#FFC107" if r2_adj >= 0.50 else "#F44336")
+            
             # Testes Estatísticos (Retorno Booleano)
             try:
                 # 1. Normalidade (Shapiro-Wilk)
@@ -2757,14 +2821,13 @@ class MainWindow(QMainWindow):
             
             self.card_outliers.set_value(str(n_outliers), cor_out)
             
+            # --- LÓGICA DO CARD: RESÍDUOS ---
             stats_resid = self.model.get_dist_residuos_stats(usar_limpo=usar_limpo)
             if stats_resid:
                 p1, p164, p196 = stats_resid
-                # Formata a string como solicitado: "XX% YY% ZZ%"
-                txt_resid = f"{p1:.0%} {p164:.0%} {p196:.0%}"
+                # Passa a usar o fmt_num!
+                txt_resid = f"{self.fmt_num(p1*100, 0)}% {self.fmt_num(p164*100, 0)}% {self.fmt_num(p196*100, 0)}%"
                 
-                # Critério de cor: 
-                # Verde se a soma dos desvios em relação ao teórico for pequena (< 15% total)
                 diff = abs(p1-0.68) + abs(p164-0.90) + abs(p196-0.95)
                 cor_resid = "#4CAF50" if diff < 0.15 else "#FFC107" if diff < 0.30 else "#F44336"
                 
@@ -2871,21 +2934,26 @@ class MainWindow(QMainWindow):
 
         # 1. Monta o Lado Direito (RHS) comum a ambas
         b0 = params.get('const', 0)
-        rhs = f"{b0:.6f}"
+        rhs = f"{self.fmt_num(b0, 6)}"
         for i, col in enumerate(colunas):
             if col == y_name: continue
             if col in params:
                 val = params[col]
-                x_form = self.model.transformada_print(int(comb[i]), col)
+                
+                # ADICIONE "usar_nome=True" na linha abaixo:
+                x_form = self.model.transformada_print(int(comb[i]), col, usar_nome=True)
+                
                 sinal = " + " if val >= 0 else " - "
-                rhs += f"{sinal}{abs(val):.6f} * {x_form}"
+                rhs += f"{sinal}{self.fmt_num(abs(val), 6)} * {x_form}"
 
         # 2. Equação de Regressão (Escala Transformada)
-        y_transf = self.model.transformada_print(t_y, y_name)
+        
+        # ADICIONE "usar_nome=True" na linha abaixo:
+        y_transf = self.model.transformada_print(t_y, y_name, usar_nome=True)
+        
         eq_regressao = f"{y_transf} = {rhs}"
 
-        # 3. Equação Estimativa (Escala Original de Moeda)
-        # Aplicamos a "casca" da função inversa dependendo do t_y
+        # 3. Equação Estimativa (Isolando a variável dependente Y)
         inversas = {
             0: f"{y_name} = {rhs}",
             1: f"{y_name} = 1 / [{rhs}]",
@@ -2940,8 +3008,11 @@ class MainWindow(QMainWindow):
             for r in range(len(df_av)):
                 for c in range(len(cols_originais)):
                     val = df_av.iat[r, c]
-                    text = f"{val:.4f}" if isinstance(val, (float, int)) else str(val)
-                    self.table_avaliandos.setItem(r, c, QTableWidgetItem(text))
+                    if isinstance(val, (float, int)):
+                        item = NumericItem(val, self.fmt_num(val, 4))
+                    else:
+                        item = QTableWidgetItem(str(val))
+                    self.table_avaliandos.setItem(r, c, item)
             
             self.log(f"Avaliandos carregados: {len(df_av)} imóveis (Colunas validadas).")
             self.tabs.setCurrentWidget(self.table_avaliandos)
@@ -3008,11 +3079,11 @@ class MainWindow(QMainWindow):
                 fator = valores_dict.get(col_multi, 1.0)
                 
                 # Valor Unitário (R$/m²)
-                self.table_avaliandos.setItem(r, base_c, QTableWidgetItem(f"{v_unitario:,.2f}"))
+                self.table_avaliandos.setItem(r, base_c, NumericItem(v_unitario, self.fmt_num(v_unitario, 2)))
                 # Valor Total (Unitário x Área)
-                self.table_avaliandos.setItem(r, base_c + 1, QTableWidgetItem(f"{v_unitario * fator:,.2f}"))
+                self.table_avaliandos.setItem(r, base_c + 1, NumericItem(v_unitario * fator, self.fmt_num(v_unitario * fator, 2)))
                 # Amplitude (%)
-                self.table_avaliandos.setItem(r, base_c + 2, QTableWidgetItem(f"{amplitude*100:.2f}%"))
+                self.table_avaliandos.setItem(r, base_c + 2, NumericItem(amplitude * 100, self.fmt_num(amplitude * 100, 2) + "%"))
                 
                 # Grau de Precisão (Com cor dinâmica)
                 item_grau = QTableWidgetItem(graus[grau_idx])
@@ -3191,7 +3262,7 @@ class MainWindow(QMainWindow):
 
             # 8. Restaura a Tabela Grande sem recalcular!
             if self.model.extra_data and 'tabela_resultados' in self.model.extra_data:
-                self.log("A restaurar a Tabela (Resultados) guardada...")
+                self.log("A restaurar a Tabela (Resultados) guardada...\n")
                 self._show_table_df(self.model.extra_data['tabela_resultados'])
             else:
                 self.resultados() # Só calcula se for um ficheiro mqo antigo
