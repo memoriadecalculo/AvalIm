@@ -2396,11 +2396,15 @@ class MainWindow(QMainWindow):
                 
                 pdf.set_font(font_name, "", 8)
                 texto_resumo = self.model.resumo(usar_limpo=usar_limpo)
-                pdf.multi_cell(0, 4, texto_resumo)
+                
+                # ---> APLICA O FORMATADOR INTELIGENTE AQUI <---
+                texto_resumo_formatado = self.fmt_summary(texto_resumo)
+                
+                pdf.multi_cell(0, 4, texto_resumo_formatado)
                 pdf.ln(3)
                 
                 pdf.set_font(font_name, "B", 9)
-                pdf.cell(0, 6, f"Quantidade de Outliers Encontrados (Limite {limite_outliers}σ): {qtd_outliers}", ln=True)
+                pdf.cell(0, 6, f"Quantidade de Outliers Encontrados (Limite {self.fmt_num(limite_outliers, 2)}σ): {qtd_outliers}", ln=True)
                 
                 pdf.set_font(font_name, "", 8)
                 pdf.multi_cell(0, 4, txt_dist_residuos)
@@ -2996,10 +3000,13 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "Erro de Compatibilidade", msg)
                     return # Interrompe o carregamento se não for compatível
             # ------------------------------
-
+            
+            if self.preco and self.preco in df_av.columns:
+                df_av = df_av.drop(columns=[self.preco])
+            
             self.df_avaliandos = df_av
             cols_originais = list(df_av.columns)
-            novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
+            novas_cols = ["Mínimo", "Médio", "Máximo", "Amplitude", "Precisão"]
             
             self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
             self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
@@ -3078,19 +3085,29 @@ class MainWindow(QMainWindow):
                 base_c = len(self.df_avaliandos.columns)
                 fator = valores_dict.get(col_multi, 1.0)
                 
-                # Valor Unitário (R$/m²)
-                self.table_avaliandos.setItem(r, base_c, NumericItem(v_unitario, self.fmt_num(v_unitario, 2)))
-                # Valor Total (Unitário x Área)
-                self.table_avaliandos.setItem(r, base_c + 1, NumericItem(v_unitario * fator, self.fmt_num(v_unitario * fator, 2)))
-                # Amplitude (%)
-                self.table_avaliandos.setItem(r, base_c + 2, NumericItem(amplitude * 100, self.fmt_num(amplitude * 100, 2) + "%"))
+                # Resgata os limites de confiança usando a variável correta: res_pred
+                v_medio = res_pred['valor_pontual'] * fator
+                v_min = res_pred['ic_inferior'] * fator
+                v_max = res_pred['ic_superior'] * fator
                 
-                # Grau de Precisão (Com cor dinâmica)
+                # 1. Mínimo
+                self.table_avaliandos.setItem(r, base_c, NumericItem(v_min, self.fmt_num(v_min, 2)))
+                
+                # 2. Médio (antigo "Total")
+                self.table_avaliandos.setItem(r, base_c + 1, NumericItem(v_medio, self.fmt_num(v_medio, 2)))
+                
+                # 3. Máximo
+                self.table_avaliandos.setItem(r, base_c + 2, NumericItem(v_max, self.fmt_num(v_max, 2)))
+                
+                # 4. Amplitude (%)
+                self.table_avaliandos.setItem(r, base_c + 3, NumericItem(amplitude * 100, self.fmt_num(amplitude * 100, 2) + "%"))
+                
+                # 5. Grau de Precisão (Com cor dinâmica)
                 item_grau = QTableWidgetItem(graus[grau_idx])
                 cor_hex = "#4CAF50" if grau_idx >= 2 else "#FFC107" if grau_idx == 1 else "#F44336"
                 item_grau.setForeground(QColor(cor_hex))
                 item_grau.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table_avaliandos.setItem(r, base_c + 3, item_grau)
+                self.table_avaliandos.setItem(r, base_c + 4, item_grau)
 
             except Exception as e:
                 print(f"Erro no cálculo automático da linha {r}: {e}")
@@ -3237,9 +3254,13 @@ class MainWindow(QMainWindow):
             # 5. Restaura os Avaliandos
             if self.model.extra_data and 'avaliandos' in self.model.extra_data:
                 self.df_avaliandos = self.model.extra_data['avaliandos']
+                
+                if self.preco and self.preco in self.df_avaliandos.columns:
+                    self.df_avaliandos = self.df_avaliandos.drop(columns=[self.preco])
+                
                 df_av = self.df_avaliandos
                 cols_originais = list(df_av.columns)
-                novas_cols = ["Unitário", "Total", "Amplitude (%)", "Precisão"]
+                novas_cols = ["Mínimo", "Médio", "Máximo", "Amplitude", "Precisão"]
                 
                 self.table_avaliandos.setColumnCount(len(cols_originais) + len(novas_cols))
                 self.table_avaliandos.setHorizontalHeaderLabels(cols_originais + novas_cols)
