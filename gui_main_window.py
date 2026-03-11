@@ -746,6 +746,17 @@ class MainWindow(QMainWindow):
         # --- MENU ARQUIVO ---
         m_file = mb.addMenu("&Arquivo")
         
+        # ---> ADICIONE ESTE BLOCO AQUI (NOVO PROJETO)
+        self.act_novo = self._make_action(
+            "&Novo Projeto", 
+            slot=self.novo_projeto, 
+            shortcut=QKeySequence("Ctrl+N"),
+            tip="Limpar tudo e iniciar um novo projeto vazio"
+        )
+        m_file.addAction(self.act_novo)
+        m_file.addSeparator()
+        # <--- FIM DO BLOCO
+        
         # ----------------------------------------------------
         # NOVOS BOTÕES: ABRIR E SALVAR PROJETO
         # ----------------------------------------------------
@@ -3295,3 +3306,94 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao desenhar a interface do projeto:\n{e}")
             self.lbl_status.setText("Erro ao carregar.")
+
+    # ============================================================
+    # NOVO PROJETO (RESET TOTAL)
+    # ============================================================
+    def novo_projeto(self):
+        """Limpa toda a memória, tabelas e gráficos, voltando ao estado inicial."""
+        
+        # 1. Pede confirmação se já houver algum dado carregado
+        if self.df is not None:
+            from PyQt6.QtWidgets import QMessageBox
+            resposta = QMessageBox.question(
+                self, "Novo Projeto",
+                "Tem certeza que deseja iniciar um novo projeto?\nTodos os dados não salvos serão perdidos.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if resposta == QMessageBox.StandardButton.No:
+                return
+                
+        self.log_action("Novo Projeto")
+
+        # 2. Resetar variáveis de estado na memória
+        self.df = None
+        self.model = None
+        self.preco = None
+        self.csv_path = None
+        
+        if hasattr(self, 'df_avaliandos'):
+            self.df_avaliandos = None
+
+        self._usar_limpo_flag = False
+        self._limpo_ready = False
+        self._limpo_ready_idx = None
+        self._ultima_amplitude = None
+        
+        # 3. Limpar a Interface Gráfica (Textos e Labels)
+        self.lbl_arquivo.setText("Arquivo: (nenhum)")
+        self.lbl_arquivo.setToolTip("Nenhum arquivo carregado.")
+        self.lbl_status.setText("Pronto.")
+        self.progress.setValue(0)
+
+        # Reseta o Checkbox de Outliers
+        self.chk_sem_outliers.blockSignals(True)
+        self.chk_sem_outliers.setChecked(False)
+        self.chk_sem_outliers.blockSignals(False)
+
+        # Reseta o SpinBox de Modelos
+        self._updating_model_spin = True
+        self.spin_modelo.setEnabled(False)
+        if hasattr(self.spin_modelo, 'set_ranking'):
+            self.spin_modelo.set_ranking([])
+        self.spin_modelo.setMinimum(0)
+        self.spin_modelo.setMaximum(0)
+        self.spin_modelo.setValue(0)
+        self._updating_model_spin = False
+
+        # 4. Limpar todas as Abas (Tabelas e Logs)
+        self.log_box.clear()
+        
+        self.table_dados.setRowCount(0)
+        self.table_dados.setColumnCount(0)
+        
+        self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+        
+        self.table_avaliandos.setRowCount(0)
+        self.table_avaliandos.setColumnCount(0)
+
+        # 5. Limpar todos os Gráficos
+        paineis = [
+            self.panel_box, self.panel_graficos, self.panel_residuos, 
+            self.panel_cooks, self.panel_corr, self.panel_aderencia, self.panel_hist
+        ]
+        for panel in paineis:
+            panel.set_figure(None)
+
+        # 6. Limpar o Dashboard (Zerar os Cards)
+        cards = [
+            self.card_r2, self.card_r2_adj, self.card_fund, self.card_outliers, 
+            self.card_resid, self.card_norm, self.card_norm_ks, self.card_homoc, 
+            self.card_auto, self.card_vif
+        ]
+        for card in cards:
+            card.set_value("-", color="#000000")
+
+        # 7. Volta o foco para a aba inicial (Dados)
+        self.tabs.setCurrentWidget(self.table_dados)
+
+        # 8. Reavalia os botões (Isso vai desativar tudo, já que apagamos os dados)
+        self._update_action_states()
+        self.log("Sistema pronto para um novo projeto.")
