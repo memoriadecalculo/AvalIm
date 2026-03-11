@@ -2973,10 +2973,10 @@ class MainWindow(QMainWindow):
             0: f"{y_name} = {rhs}",
             1: f"{y_name} = 1 / [{rhs}]",
             2: f"{y_name} = e^[{rhs}]",
-            3: f"{y_name} = sqrt[{rhs}]",
-            4: f"{y_name} = [{rhs}]^2",
-            5: f"{y_name} = 1 / sqrt[{rhs}]",
-            6: f"{y_name} = 1 / [{rhs}]^2"
+            3: f"{y_name} = √[{rhs}]",
+            4: f"{y_name} = [{rhs}]²",
+            5: f"{y_name} = 1 / √[{rhs}]",
+            6: f"{y_name} = 1 / [{rhs}]²"
         }
         eq_estimativa = inversas.get(t_y, f"{y_name} = f^-1[{rhs}]")
 
