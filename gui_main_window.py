@@ -3397,3 +3397,52 @@ class MainWindow(QMainWindow):
         # 8. Reavalia os botões (Isso vai desativar tudo, já que apagamos os dados)
         self._update_action_states()
         self.log("Sistema pronto para um novo projeto.")
+
+    # ============================================================
+    # EVENTO DE FECHAMENTO (X DA JANELA OU MENU SAIR)
+    # ============================================================
+    def closeEvent(self, event):
+        """Intercepta o fechamento da janela para perguntar se deseja salvar."""
+        
+        # Se não há dados carregados, fecha o programa direto sem perguntar
+        if self.df is None:
+            event.accept()
+            return
+
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Cria uma caixa de mensagem personalizada
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Sair do AvalIm")
+        msg.setText("Você possui um projeto ativo. Deseja salvar antes de sair?")
+        msg.setIcon(QMessageBox.Icon.Question)
+        
+        # Define os botões
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Save | 
+            QMessageBox.StandardButton.Discard | 
+            QMessageBox.StandardButton.Cancel
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Save)
+        
+        # Traduz os textos dos botões nativos para o português
+        msg.button(QMessageBox.StandardButton.Save).setText("Salvar Projeto")
+        msg.button(QMessageBox.StandardButton.Discard).setText("Sair sem salvar")
+        msg.button(QMessageBox.StandardButton.Cancel).setText("Cancelar")
+
+        # Exibe a janela e captura a resposta
+        resposta = msg.exec()
+
+        if resposta == QMessageBox.StandardButton.Save:
+            # O usuário escolheu Salvar. Abre a tela de salvar projeto.
+            self.salvar_projeto()
+            # Após o fluxo de salvamento, permite que a janela feche
+            event.accept()
+            
+        elif resposta == QMessageBox.StandardButton.Discard:
+            # O usuário quer sair sem salvar nada. Apenas fecha.
+            event.accept()
+            
+        else:
+            # O usuário clicou em Cancelar (ou apertou Esc). Aborta o fechamento!
+            event.ignore()
