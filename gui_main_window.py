@@ -2341,19 +2341,44 @@ class MainWindow(QMainWindow):
                 
                 # --- REGISTRO DE FONTE UNICODE (OBRIGATÓRIO PARA MATEMÁTICA) ---
                 font_name = 'DejaVuMono'
+                
+                # Função mágica que descobre onde o executável escondeu as fontes
+                def get_resource_path(filename):
+                    import sys # <-- IMPORTAÇÃO CRUCIAL AQUI
+                    import os
+                    if hasattr(sys, '_MEIPASS'):
+                        # Se estiver rodando como .exe (compilado)
+                        return os.path.join(sys._MEIPASS, filename)
+                    # Se estiver rodando direto no script Python
+                    return os.path.join(os.path.abspath("."), filename)
+
                 try:
-                    pdf.add_font(font_name, '', 'DejaVuSansMono.ttf')
-                    if os.path.exists('DejaVuSansMono-Bold.ttf'): pdf.add_font(font_name, 'B', 'DejaVuSansMono-Bold.ttf')
-                    else: pdf.add_font(font_name, 'B', 'DejaVuSansMono.ttf')
-                    if os.path.exists('DejaVuSansMono-Oblique.ttf'): pdf.add_font(font_name, 'I', 'DejaVuSansMono-Oblique.ttf')
-                    else: pdf.add_font(font_name, 'I', 'DejaVuSansMono.ttf')
+                    caminho_normal = get_resource_path('DejaVuSansMono.ttf')
+                    caminho_bold = get_resource_path('DejaVuSansMono-Bold.ttf')
+                    caminho_oblique = get_resource_path('DejaVuSansMono-Oblique.ttf')
+                    
+                    # Tenta carregar a fonte normal (obrigatória)
+                    pdf.add_font(font_name, '', caminho_normal)
+                    
+                    # Verifica e carrega o Negrito
+                    if os.path.exists(caminho_bold): 
+                        pdf.add_font(font_name, 'B', caminho_bold)
+                    else: 
+                        pdf.add_font(font_name, 'B', caminho_normal)
+                        
+                    # Verifica e carrega o Itálico
+                    if os.path.exists(caminho_oblique): 
+                        pdf.add_font(font_name, 'I', caminho_oblique)
+                    else: 
+                        pdf.add_font(font_name, 'I', caminho_normal)
+                        
                 except Exception as e:
-                    self.log("Erro: Arquivo 'DejaVuSansMono.ttf' não encontrado na pasta.")
+                    self.log(f"Erro real ao carregar fonte: {e}") # Joga o erro de verdade no Log!
                     QMessageBox.critical(
-                        self, "Fonte Ausente", 
-                        "Para imprimir equações (√, R²), o arquivo 'DejaVuSansMono.ttf' precisa estar na pasta."
+                        self, "Erro de Fonte", 
+                        f"Não foi possível carregar a fonte.\n\nDetalhe técnico: {e}"
                     )
-                    return 
+                    return
 
                 pdf.set_auto_page_break(auto=True, margin=10)
                 pdf.add_page()

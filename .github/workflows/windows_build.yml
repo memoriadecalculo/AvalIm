@@ -26,9 +26,9 @@ jobs:
       run: |
         # --noconsole: não abre o CMD preto atrás
         # --onefile: gera um único arquivo .exe
-        # --collect-all: garante que o statsmodels e matplotlib levem todas as sub-bibliotecas
-        # --add-data: embute arquivos estáticos no executável (formato "origem;destino_interno")
-        pyinstaller --noconsole --onefile --collect-all statsmodels --collect-all matplotlib --add-data "DejaVuSansMono.ttf;." --add-data "DejaVuSansMono-Bold.ttf;." --add-data "DejaVuSansMono-Oblique.ttf;." --add-data "DejaVuSansMono-BoldOblique.ttf;." --name "AvalIm_Windows" main.py
+        # --collect-all: garante que as bibliotecas científicas levem todas as suas sub-pastas invisíveis
+        # --add-data: embute as fontes no executável
+        pyinstaller --noconsole --onefile --collect-all statsmodels --collect-all matplotlib --collect-all numpy --collect-all pandas --add-data "DejaVuSansMono.ttf;." --add-data "DejaVuSansMono-Bold.ttf;." --add-data "DejaVuSansMono-Oblique.ttf;." --add-data "DejaVuSansMono-BoldOblique.ttf;." --name "AvalIm_Windows" main.py
 
     - name: Upload do Executável (Artefato)
       uses: actions/upload-artifact@v4
